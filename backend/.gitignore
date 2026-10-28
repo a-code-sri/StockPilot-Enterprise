@@ -1,0 +1,17 @@
+# ============================================================================
+# Python Virtual Environments
+# ============================================================================
+# Prevents heavy dependencies, binaries, and local packages from being committed.
+.venv/
+venv/
+ENV/
+env/
+
+# ============================================================================
+# Environment Variables and Secrets
+# ============================================================================
+# Protects your sensitive API keys, database passwords, and local tokens.
+.env
+.env.local
+.env.*
+!.env.example

@@ -1,0 +1,129 @@
+/* Simple org-chart connectors using nested UL/LI */
+/* Kept framework-agnostic; works with Tailwind dark UI */
+
+.orgchart {
+  width: 100%;
+  overflow-x: auto;
+  padding: 8px 0 24px;
+}
+
+.orgchart .tree {
+  display: inline-block;
+  min-width: max-content;
+  padding: 8px 16px;
+}
+
+.orgchart ul {
+  padding-top: 20px;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.orgchart li {
+  float: left;
+  text-align: center;
+  list-style-type: none;
+  position: relative;
+  padding: 20px 10px 0 10px;
+}
+
+/* connectors (top horizontal lines) */
+.orgchart li::before,
+.orgchart li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 50%;
+  border-top: 1px solid rgba(148, 163, 184, 0.35); /* slate-400-ish */
+  width: 50%;
+  height: 20px;
+}
+
+.orgchart li::after {
+  right: auto;
+  left: 50%;
+  border-left: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+/* remove connectors for only child */
+.orgchart li:only-child::after,
+.orgchart li:only-child::before {
+  display: none;
+}
+
+.orgchart li:only-child {
+  padding-top: 0;
+}
+
+/* remove left connector from first child, right connector from last child */
+.orgchart li:first-child::before {
+  border: 0 none;
+}
+
+.orgchart li:last-child::after {
+  border: 0 none;
+}
+
+/* add vertical connector down to children */
+.orgchart ul ul::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  border-left: 1px solid rgba(148, 163, 184, 0.35);
+  width: 0;
+  height: 20px;
+}
+
+/* node style */
+.orgchart .node {
+  display: inline-block;
+  min-width: 220px;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(17, 24, 39, 0.9);           /* gray-900 */
+  border: 1px solid rgba(31, 41, 55, 1);       /* gray-800 */
+  color: rgba(229, 231, 235, 1);               /* gray-200 */
+  box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+}
+
+.orgchart .node .title {
+  font-weight: 700;
+  font-size: 14px;
+  color: rgba(129, 140, 248, 1); /* indigo-400 */
+}
+
+.orgchart .node .subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(156, 163, 175, 1); /* gray-400 */
+}
+
+.orgchart .node .meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(209, 213, 219, 1); /* gray-300 */
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.orgchart .chip {
+  display: inline-block;
+  margin-top: 8px;
+  margin-right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.10);
+  color: rgba(199, 210, 254, 1);
+}
+
+/* clearfix for floats */
+.orgchart .clearfix::after {
+  content: "";
+  display: table;
+  clear: both;
+}
