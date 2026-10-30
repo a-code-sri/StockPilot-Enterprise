@@ -1,439 +1,274 @@
-import { useEffect, useState } from "react";
-import Sidebar from "../components/Sidebar";
-import api from "../api";
-import { MOCK_MODE } from "../config";
+import { useCallback, useEffect, useState } from "react";
+import api, { errorMessage } from "../api";
+import { useAuth } from "../context/AuthContext";
+import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
 
-export default function Inventory() {
-  const [items, setItems] = useState([]);
-  const [activeTab, setActiveTab] = useState("inventory");
-  const [logs, setLogs] = useState([]);
-  const [selectedItem, setSelectedItem] = useState(null);
+const STATUSES = [
+  ["under_use", "Under use"],
+  ["ordered", "Ordered"],
+  ["consumed", "Consumed"],
+];
 
-  const [form, setForm] = useState({
-    name: "",
-    quantity: "",
-    price: "",
-    status: "under_use",
-  });
+const MOVEMENTS = [
+  ["add", "Receive stock (+)"],
+  ["consume", "Consume (−)"],
+  ["deliver", "Deliver (−)"],
+  ["order", "Place order (on-order +)"],
+  ["return", "Return to stock (+)"],
+];
 
-  const [error, setError] = useState("");
+const EMPTY_FORM = { name: "", quantity: "", on_order_quantity: "", price: "", status: "under_use", expiry_date: "" };
 
-  useEffect(() => {
-    fetchInventory();
-  }, []);
+const money = (v) => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const fetchInventory = async () => {
+function MovementForm({ item, onDone, onError }) {
+  const [action, setAction] = useState("consume");
+  const [quantity, setQuantity] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
     try {
-      setError("");
-
-      if (MOCK_MODE) {
-        setItems([
-          {
-            id: 1,
-            name: "Steel",
-            quantity: 100,
-            price: 50,
-            status: "under_use",
-          },
-          {
-            id: 2,
-            name: "Plastic",
-            quantity: 40,
-            price: 20,
-            status: "ordered",
-          },
-        ]);
-        return;
-      }
-
-      const res = await api.get("/inventory/");
-      setItems(res.data);
+      await api.put(`/inventory/${item.id}`, { action, quantity: Number(quantity), note: note.trim() || null });
+      setQuantity("");
+      setNote("");
+      onDone();
     } catch (err) {
-      setError(
-        err.response?.data?.detail || "Failed to load inventory"
-      );
-    }
-  };
-
-  const fetchLogs = async (name) => {
-    try {
-      setError("");
-      setSelectedItem(name);
-
-      if (MOCK_MODE) {
-        setLogs([
-          {
-            action: "add",
-            quantity: 50,
-            timestamp: "2026-08-01",
-          },
-          {
-            action: "consume",
-            quantity: 10,
-            timestamp: "2026-08-02",
-          },
-          {
-            action: "status_change",
-            quantity: 40,
-            timestamp: "2026-08-03",
-          },
-        ]);
-      } else {
-        const encodedName = encodeURIComponent(name);
-
-        const res = await api.get(
-          `/inventory/${encodedName}/logs`
-        );
-
-        setLogs(res.data);
-      }
-
-      setActiveTab("logs");
-    } catch (err) {
-      setError(
-        err.response?.data?.detail || "Failed to load inventory logs"
-      );
-    }
-  };
-
-  const createItem = async () => {
-    try {
-      setError("");
-
-      if (!form.name.trim()) {
-        setError("Item name is required");
-        return;
-      }
-
-      if (form.quantity === "" || Number(form.quantity) < 0) {
-        setError("Quantity must be zero or greater");
-        return;
-      }
-
-      if (form.price === "" || Number(form.price) < 0) {
-        setError("Price must be zero or greater");
-        return;
-      }
-
-      if (MOCK_MODE) {
-        setItems([
-          ...items,
-          {
-            ...form,
-            id: items.length + 1,
-            quantity: Number(form.quantity),
-            price: Number(form.price),
-          },
-        ]);
-      } else {
-        await api.post("/inventory/", {
-          name: form.name.trim(),
-          quantity: Number(form.quantity),
-          price: Number(form.price),
-          status: form.status,
-        });
-
-        await fetchInventory();
-      }
-
-      setForm({
-        name: "",
-        quantity: "",
-        price: "",
-        status: "under_use",
-      });
-    } catch (err) {
-      setError(
-        err.response?.data?.detail || "Failed to create inventory item"
-      );
-    }
-  };
-
-  const deleteItem = async (name) => {
-    try {
-      setError("");
-
-      if (MOCK_MODE) {
-        setItems(items.filter((item) => item.name !== name));
-        return;
-      }
-
-      const encodedName = encodeURIComponent(name);
-
-      await api.delete(`/inventory/${encodedName}`);
-      await fetchInventory();
-    } catch (err) {
-      setError(
-        err.response?.data?.detail || "Failed to delete inventory item"
-      );
-    }
-  };
-
-  const updateStatus = async (name, status) => {
-    try {
-      setError("");
-
-      if (MOCK_MODE) {
-        setItems(
-          items.map((item) =>
-            item.name === name
-              ? { ...item, status }
-              : item
-          )
-        );
-        return;
-      }
-
-      const encodedName = encodeURIComponent(name);
-
-      await api.put(
-        `/inventory/${encodedName}/status`,
-        { status }
-      );
-
-      await fetchInventory();
-    } catch (err) {
-      setError(
-        err.response?.data?.detail || "Failed to update inventory status"
-      );
+      onError(errorMessage(err, "Stock update failed"));
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="flex bg-gray-950 text-gray-200 min-h-screen">
-      <Sidebar />
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+      <select className={inputClass} value={action} onChange={(e) => setAction(e.target.value)} aria-label="Movement">
+        {MOVEMENTS.map(([v, l]) => (
+          <option key={v} value={v}>{l}</option>
+        ))}
+      </select>
+      <input className={`${inputClass} w-24`} type="number" min="1" required placeholder="Qty"
+        value={quantity} onChange={(e) => setQuantity(e.target.value)} aria-label="Quantity" />
+      <input className={`${inputClass} w-48`} placeholder="Note (optional)" maxLength={500}
+        value={note} onChange={(e) => setNote(e.target.value)} aria-label="Note" />
+      <button className={buttonClass.primary} disabled={busy}>{busy ? "Saving…" : "Apply"}</button>
+    </form>
+  );
+}
 
-      <div className="flex-1 p-10">
-        <h1 className="text-4xl font-bold mb-8 bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent">
-          Inventory Module
-        </h1>
+export default function Inventory() {
+  const { can } = useAuth();
+  const canWrite = can("inventory.write");
 
-        {/* Error */}
-        {error && (
-          <div className="bg-red-900/40 border border-red-700 text-red-300 p-4 rounded-lg mb-6">
-            {error}
-          </div>
-        )}
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [selected, setSelected] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [error, setError] = useState("");
 
-        {/* Tabs */}
-        <div className="flex mb-8 space-x-8 border-b border-gray-800">
-          <button
-            onClick={() => setActiveTab("inventory")}
-            className={`pb-2 ${
-              activeTab === "inventory"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Inventory
-          </button>
+  const fetchInventory = useCallback(async () => {
+    try {
+      const res = await api.get("/inventory/", {
+        params: { search: search || undefined, status: statusFilter || undefined, limit: 500 },
+      });
+      setItems(res.data);
+      setTotal(Number(res.headers["x-total-count"] ?? res.data.length));
+    } catch (err) {
+      setError(errorMessage(err, "Failed to load inventory"));
+    }
+  }, [search, statusFilter]);
 
-          <button
-            onClick={() => setActiveTab("logs")}
-            className={`pb-2 ${
-              activeTab === "logs"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Logs
-          </button>
+  useEffect(() => {
+    const t = setTimeout(fetchInventory, 250); // debounce search typing
+    return () => clearTimeout(t);
+  }, [fetchInventory]);
+
+  const fetchLogs = useCallback(async (item) => {
+    try {
+      const res = await api.get(`/inventory/${item.id}/logs`);
+      setLogs(res.data);
+    } catch (err) {
+      setError(errorMessage(err, "Failed to load history"));
+    }
+  }, []);
+
+  const select = (item) => {
+    setSelected(item);
+    fetchLogs(item);
+  };
+
+  const refreshAfterChange = async () => {
+    setError("");
+    await fetchInventory();
+    if (selected) {
+      const res = await api.get(`/inventory/${selected.id}`).catch(() => null);
+      setSelected(res?.data ?? null);
+      if (res) fetchLogs(res.data);
+    }
+  };
+
+  const createItem = async (e) => {
+    e.preventDefault();
+    setError("");
+    try {
+      await api.post("/inventory/", {
+        name: form.name.trim(),
+        quantity: Number(form.quantity || 0),
+        on_order_quantity: Number(form.on_order_quantity || 0),
+        price: Number(form.price || 0),
+        status: form.status,
+        expiry_date: form.expiry_date || null,
+      });
+      setForm(EMPTY_FORM);
+      fetchInventory();
+    } catch (err) {
+      setError(errorMessage(err, "Failed to create item"));
+    }
+  };
+
+  const deleteItem = async (item) => {
+    if (!window.confirm(`Delete "${item.name}"? Its history is kept for analytics.`)) return;
+    try {
+      await api.delete(`/inventory/${item.id}`);
+      if (selected?.id === item.id) setSelected(null);
+      fetchInventory();
+    } catch (err) {
+      setError(errorMessage(err, "Failed to delete item"));
+    }
+  };
+
+  const updateStatus = async (item, status) => {
+    try {
+      await api.put(`/inventory/${item.id}/status`, { status });
+      refreshAfterChange();
+    } catch (err) {
+      setError(errorMessage(err, "Failed to update status"));
+    }
+  };
+
+  const setField = (field) => (e) => setForm({ ...form, [field]: e.target.value });
+
+  return (
+    <Page title="Inventory" subtitle={`${total} item${total === 1 ? "" : "s"}`}>
+      <ErrorBanner message={error} onClose={() => setError("")} />
+
+      {canWrite && (
+        <Panel title="Add item" className="mb-8">
+          <form onSubmit={createItem} className="flex flex-wrap gap-3">
+            <input className={inputClass} required maxLength={200} placeholder="Name" value={form.name} onChange={setField("name")} />
+            <input className={`${inputClass} w-28`} type="number" min="0" placeholder="Quantity" value={form.quantity} onChange={setField("quantity")} />
+            <input className={`${inputClass} w-28`} type="number" min="0" placeholder="On order" value={form.on_order_quantity} onChange={setField("on_order_quantity")} />
+            <input className={`${inputClass} w-28`} type="number" min="0" step="0.01" placeholder="Price" value={form.price} onChange={setField("price")} />
+            <select className={inputClass} value={form.status} onChange={setField("status")} aria-label="Status">
+              {STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <label className="flex items-center gap-2 text-sm text-gray-400">
+              Expiry
+              <input className={inputClass} type="date" value={form.expiry_date} onChange={setField("expiry_date")} />
+            </label>
+            <button className={buttonClass.primary}>Add</button>
+          </form>
+        </Panel>
+      )}
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input className={`${inputClass} w-64`} placeholder="Search by name…" value={search}
+          onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
+        <select className={inputClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+          <option value="">All statuses</option>
+          {STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-800 text-gray-400 text-xs uppercase text-left">
+              <tr>
+                <th className="p-3">Name</th>
+                <th className="p-3 text-right">In stock</th>
+                <th className="p-3 text-right">On order</th>
+                <th className="p-3 text-right">Price</th>
+                <th className="p-3">Expiry</th>
+                <th className="p-3">Status</th>
+                <th className="p-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr><td colSpan={7} className="p-6 text-center text-gray-500">No items.</td></tr>
+              )}
+              {items.map((item) => (
+                <tr key={item.id}
+                  className={`border-t border-gray-800 hover:bg-gray-800/40 ${selected?.id === item.id ? "bg-indigo-500/10" : ""}`}>
+                  <td className="p-3">
+                    <button type="button" className="text-left hover:text-indigo-300" onClick={() => select(item)}>
+                      {item.name}
+                    </button>
+                  </td>
+                  <td className={`p-3 text-right ${item.quantity === 0 ? "text-red-300" : ""}`}>{item.quantity}</td>
+                  <td className="p-3 text-right text-gray-400">{item.on_order_quantity}</td>
+                  <td className="p-3 text-right">{money(item.price)}</td>
+                  <td className="p-3 text-gray-400">{item.expiry_date || "—"}</td>
+                  <td className="p-3">
+                    {canWrite ? (
+                      <select className="bg-gray-800 rounded p-1" value={item.status}
+                        onChange={(e) => updateStatus(item, e.target.value)} aria-label={`Status of ${item.name}`}>
+                        {STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    ) : (
+                      STATUSES.find(([v]) => v === item.status)?.[1]
+                    )}
+                  </td>
+                  <td className="p-3 whitespace-nowrap space-x-2 text-right">
+                    <button type="button" className={buttonClass.small} onClick={() => select(item)}>Manage</button>
+                    {canWrite && (
+                      <button type="button" className={buttonClass.danger} onClick={() => deleteItem(item)}>Delete</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
-        {activeTab === "inventory" && (
-          <>
-            {/* Add Inventory */}
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <div className="flex flex-wrap gap-4">
-                <input
-                  value={form.name}
-                  placeholder="Name"
-                  className="bg-gray-800 p-3 rounded"
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      name: e.target.value,
-                    })
-                  }
-                />
-
-                <input
-                  value={form.quantity}
-                  placeholder="Quantity"
-                  type="number"
-                  min="0"
-                  className="bg-gray-800 p-3 rounded"
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      quantity: e.target.value,
-                    })
-                  }
-                />
-
-                <input
-                  value={form.price}
-                  placeholder="Price"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="bg-gray-800 p-3 rounded"
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      price: e.target.value,
-                    })
-                  }
-                />
-
-                <select
-                  value={form.status}
-                  className="bg-gray-800 p-3 rounded"
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      status: e.target.value,
-                    })
-                  }
-                >
-                  <option value="under_use">
-                    Under Use
-                  </option>
-                  <option value="ordered">
-                    Ordered
-                  </option>
-                  <option value="consumed">
-                    Consumed
-                  </option>
-                </select>
-
-                <button
-                  onClick={createItem}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-lg"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-
-            {/* Inventory Table */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-800 text-gray-400 text-sm uppercase">
-                  <tr>
-                    <th className="p-4">Name</th>
-                    <th className="p-4">Units</th>
-                    <th className="p-4">Price</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4">Actions</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {items.map((item) => (
-                    <tr
-                      key={item.id}
-                      className="border-t border-gray-800 hover:bg-gray-800/50"
-                    >
-                      <td className="p-4">
-                        {item.name}
-                      </td>
-
-                      <td className="p-4">
-                        {item.quantity}
-                      </td>
-
-                      <td className="p-4">
-                        ${item.price}
-                      </td>
-
-                      <td className="p-4 capitalize">
-                        {item.status}
-                      </td>
-
-                      <td className="p-4 space-x-2">
-                        <select
-                          onChange={(e) =>
-                            updateStatus(
-                              item.name,
-                              e.target.value
-                            )
-                          }
-                          value={item.status}
-                          className="bg-gray-800 p-1 rounded"
-                        >
-                          <option value="under_use">
-                            Under Use
-                          </option>
-                          <option value="ordered">
-                            Ordered
-                          </option>
-                          <option value="consumed">
-                            Consumed
-                          </option>
-                        </select>
-
-                        <button
-                          onClick={() =>
-                            fetchLogs(item.name)
-                          }
-                          className="bg-blue-600 px-3 py-1 rounded"
-                        >
-                          Logs
-                        </button>
-
-                        <button
-                          onClick={() =>
-                            deleteItem(item.name)
-                          }
-                          className="bg-red-600 px-3 py-1 rounded"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {activeTab === "logs" && (
-          <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
-            <h2 className="text-xl font-semibold mb-6">
-              Logs for {selectedItem}
-            </h2>
-
-            {logs.length === 0 ? (
-              <p className="text-gray-500">
-                No logs found.
-              </p>
-            ) : (
-              logs.map((log) => (
-                <div
-                  key={log.id}
-                  className="flex justify-between border-b border-gray-800 py-3"
-                >
-                  <span className="capitalize">
-                    {log.action}
-                  </span>
-
-                  <span>
-                    {log.quantity}
-                  </span>
-
-                  <span className="text-gray-400">
-                    {new Date(
-                      log.timestamp
-                    ).toLocaleString()}
-                  </span>
+        <Panel
+          title={selected ? selected.name : "Select an item"}
+          subtitle={selected ? `In stock ${selected.quantity} · on order ${selected.on_order_quantity}` : "Click an item to record stock movements and see its history."}
+        >
+          {selected && (
+            <>
+              {canWrite && (
+                <div className="mb-6">
+                  <MovementForm item={selected} onDone={refreshAfterChange} onError={setError} />
                 </div>
-              ))
-            )}
-          </div>
-        )}
+              )}
+              <h3 className="text-xs uppercase text-gray-400 mb-2">History</h3>
+              {logs.length === 0 ? (
+                <p className="text-gray-500 text-sm">No movements yet.</p>
+              ) : (
+                <ul className="divide-y divide-gray-800 text-sm max-h-[480px] overflow-y-auto">
+                  {logs.map((log) => (
+                    <li key={log.id} className="py-2 flex justify-between gap-3">
+                      <span>
+                        <span className="capitalize">{log.action.replace("_", " ")}</span>
+                        {log.quantity != null && <span className="text-gray-300"> · {log.quantity}</span>}
+                        {log.detail && <span className="block text-xs text-gray-500">{log.detail}</span>}
+                      </span>
+                      <span className="text-gray-500 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </Panel>
       </div>
-    </div>
+    </Page>
   );
 }

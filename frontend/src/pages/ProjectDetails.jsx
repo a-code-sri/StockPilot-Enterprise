@@ -1,204 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
-import api from "../api";
-import { MOCK_MODE } from "../config";
-
-const MOCK_PROJECTS_KEY = "mock_projects";
-const MOCK_TASKS_KEY = "mock_project_tasks";
-
-function loadMockProjects() {
-  return JSON.parse(localStorage.getItem(MOCK_PROJECTS_KEY) || "[]");
-}
-function loadMockTasksMap() {
-  return JSON.parse(localStorage.getItem(MOCK_TASKS_KEY) || "{}");
-}
-function saveMockTasksMap(map) {
-  localStorage.setItem(MOCK_TASKS_KEY, JSON.stringify(map));
-}
+import api, { errorMessage } from "../api";
 
 function parseCsvList(s) {
   return (s || "")
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-}
-
-function toISODate(dateObj) {
-  // dateObj is JS Date
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
-}
-
-// Local CPM/PERT computation for MOCK_MODE
-function simulateLocally(project, tasks) {
-  if (!tasks || tasks.length === 0) {
-    const availableDays =
-      (new Date(project.deadline) - new Date(project.start_date)) / (1000 * 60 * 60 * 24);
-    return {
-      project_id: project.id,
-      project_duration_days: 0,
-      critical_path_task_ids: [],
-      tasks: [],
-      resource_conflicts: {},
-      deadline_days_remaining: availableDays,
-    };
-  }
-
-  const taskById = new Map(tasks.map((t) => [t.id, t]));
-
-  const expectedDuration = (t) => {
-    if (t.optimistic != null) {
-      return (t.optimistic + 4 * t.most_likely + t.pessimistic) / 6.0;
-    }
-    return Number(t.duration_days);
-  };
-
-  const durations = {};
-  tasks.forEach((t) => (durations[t.id] = expectedDuration(t)));
-
-  const preds = {};
-  tasks.forEach((t) => (preds[t.id] = t.predecessor_task_ids || []));
-
-  // build indegree/successors
-  const indeg = {};
-  const succ = {};
-  tasks.forEach((t) => {
-    indeg[t.id] = 0;
-    succ[t.id] = [];
-  });
-
-  for (const [tid, pids] of Object.entries(preds)) {
-    for (const pid of pids) {
-      if (!taskById.has(pid)) {
-        throw new Error(`Invalid predecessor id ${pid} in task ${tid}.`);
-      }
-      indeg[tid] += 1;
-      succ[pid].push(Number(tid));
-    }
-  }
-
-  // Kahn topo
-  const q = Object.keys(indeg)
-    .filter((k) => indeg[k] === 0)
-    .map(Number);
-
-  const topo = [];
-  while (q.length) {
-    const n = q.shift();
-    topo.push(n);
-    for (const s of succ[n]) {
-      indeg[s] -= 1;
-      if (indeg[s] === 0) q.push(s);
-    }
-  }
-  if (topo.length !== tasks.length) {
-    throw new Error("Cycle detected in predecessors. CPM/PERT requires a DAG.");
-  }
-
-  // Forward pass
-  const ES = {};
-  const EF = {};
-  for (const tid of topo) {
-    const pids = preds[tid] || [];
-    ES[tid] = pids.length ? Math.max(...pids.map((p) => EF[p])) : 0;
-    EF[tid] = ES[tid] + durations[tid];
-  }
-  const project_duration_days = Math.max(...Object.values(EF));
-
-  // Backward pass
-  const LF = {};
-  const LS = {};
-  for (let i = topo.length - 1; i >= 0; i--) {
-    const tid = topo[i];
-    const succs = succ[tid] || [];
-    LF[tid] = succs.length ? Math.min(...succs.map((s) => LS[s])) : project_duration_days;
-    LS[tid] = LF[tid] - durations[tid];
-  }
-
-  const float = {};
-  for (const tid of topo) float[tid] = +(LS[tid] - ES[tid]).toFixed(6);
-
-  const critical = topo.filter((tid) => Math.abs(float[tid]) < 1e-6);
-
-  // critical path reconstruction (simple)
-  const critical_path_task_ids = [];
-  const startCrit = critical.filter((tid) => (preds[tid] || []).length === 0);
-  if (startCrit.length) {
-    let cur = startCrit.sort((a, b) => ES[a] - ES[b])[0];
-    critical_path_task_ids.push(cur);
-    while (true) {
-      const next = (succ[cur] || []).filter(
-        (s) => critical.includes(s) && Math.abs(ES[s] - EF[cur]) < 1e-6
-      );
-      if (!next.length) break;
-      cur = next.sort((a, b) => ES[a] - ES[b])[0];
-      critical_path_task_ids.push(cur);
-    }
-  }
-
-  // timeline dates
-  const start = new Date(project.start_date);
-  const toPlanned = (offsetDays) => {
-    const d = new Date(start);
-    d.setDate(d.getDate() + offsetDays);
-    return toISODate(d);
-  };
-
-  // resource conflicts
-  const intervals = {}; // emp -> [{tid, s, e}]
-  tasks.forEach((t) => {
-    (t.resource_employee_ids || []).forEach((emp) => {
-      intervals[emp] ||= [];
-      intervals[emp].push({ tid: t.id, s: ES[t.id], e: EF[t.id] });
-    });
-  });
-
-  const resource_conflicts = {};
-  for (const [emp, arr] of Object.entries(intervals)) {
-    arr.sort((a, b) => a.s - b.s);
-    const conf = [];
-    for (let i = 0; i < arr.length; i++) {
-      for (let j = i + 1; j < arr.length; j++) {
-        if (arr[j].s >= arr[i].e) break;
-        const overlap = Math.min(arr[i].e, arr[j].e) - Math.max(arr[i].s, arr[j].s);
-        if (overlap > 0) {
-          conf.push({ task_a: arr[i].tid, task_b: arr[j].tid, overlap_days: overlap });
-        }
-      }
-    }
-    if (conf.length) resource_conflicts[emp] = conf;
-  }
-
-  const schedule = tasks
-    .map((t) => ({
-      id: t.id,
-      name: t.name,
-      expected_duration_days: durations[t.id],
-      ES: ES[t.id],
-      EF: EF[t.id],
-      LS: LS[t.id],
-      LF: LF[t.id],
-      float: float[t.id],
-      planned_start: toPlanned(Math.floor(ES[t.id])),
-      planned_end: toPlanned(Math.ceil(EF[t.id])),
-      predecessor_task_ids: preds[t.id] || [],
-      resource_employee_ids: t.resource_employee_ids || [],
-    }))
-    .sort((a, b) => a.ES - b.ES);
-
-  const availableDays =
-    (new Date(project.deadline) - new Date(project.start_date)) / (1000 * 60 * 60 * 24);
-  const deadline_days_remaining = availableDays - project_duration_days;
-
-  return {
-    project_id: project.id,
-    project_duration_days,
-    critical_path_task_ids,
-    tasks: schedule,
-    resource_conflicts,
-    deadline_days_remaining,
-  };
 }
 
 export default function ProjectDetails() {
@@ -235,13 +44,7 @@ export default function ProjectDetails() {
     setInfo("");
   };
 
-  const extractErrorDetail = (e) => {
-    const detail =
-      e?.response?.data?.detail ||
-      e?.message ||
-      "Something went wrong. Please try again.";
-    return typeof detail === "string" ? detail : JSON.stringify(detail);
-  };
+  const extractErrorDetail = (e) => errorMessage(e);
 
   const predecessor_task_ids = useMemo(
     () =>
@@ -259,19 +62,6 @@ export default function ProjectDetails() {
   const fetchProject = async () => {
     clearMessages();
 
-    if (MOCK_MODE) {
-      const p = loadMockProjects().find((x) => x.id === projectId);
-      if (!p) {
-        setError("Project not found (mock).");
-        return;
-      }
-      setProject(p);
-
-      const map = loadMockTasksMap();
-      setTasks(map[String(projectId)] || []);
-      return;
-    }
-
     try {
       const res = await api.get(`/projects/${projectId}`);
       setProject(res.data);
@@ -282,12 +72,6 @@ export default function ProjectDetails() {
 
   const fetchTasks = async () => {
     clearMessages();
-
-    if (MOCK_MODE) {
-      const map = loadMockTasksMap();
-      setTasks(map[String(projectId)] || []);
-      return;
-    }
 
     try {
       const res = await api.get(`/projects/${projectId}/tasks`);
@@ -326,48 +110,6 @@ export default function ProjectDetails() {
     if (anyPert && !allPert) return setError("PERT requires optimistic, most_likely, pessimistic together.");
     if (allPert && !(o <= m && m <= p)) return setError("PERT requires optimistic <= most_likely <= pessimistic.");
 
-    if (MOCK_MODE) {
-      const map = loadMockTasksMap();
-      const list = map[String(projectId)] || [];
-
-      const nextId = list.length ? Math.max(...list.map((t) => t.id)) + 1 : 1;
-
-      // quick predecessor validation in mock
-      const ids = new Set(list.map((t) => t.id));
-      const missing = predecessor_task_ids.filter((pid) => !ids.has(pid));
-      if (missing.length) return setError(`Invalid predecessor task id(s): ${missing}`);
-
-      const newTask = {
-        id: nextId,
-        project_id: projectId,
-        name: taskForm.name.trim(),
-        description: taskForm.description?.trim() || null,
-        duration_days: duration,
-        optimistic: o,
-        most_likely: m,
-        pessimistic: p,
-        predecessor_task_ids,
-        resource_employee_ids,
-        created_at: new Date().toISOString(),
-      };
-
-      map[String(projectId)] = [...list, newTask];
-      saveMockTasksMap(map);
-      setTasks(map[String(projectId)]);
-      setInfo("Task created (mock).");
-      setTaskForm({
-        name: "",
-        description: "",
-        duration_days: "",
-        optimistic: "",
-        most_likely: "",
-        pessimistic: "",
-        predecessorsCsv: "",
-        resourcesCsv: "",
-      });
-      return;
-    }
-
     try {
       await api.post(`/projects/${projectId}/tasks`, {
         name: taskForm.name.trim(),
@@ -400,16 +142,6 @@ export default function ProjectDetails() {
   const deleteTask = async (taskId) => {
     clearMessages();
 
-    if (MOCK_MODE) {
-      const map = loadMockTasksMap();
-      const list = map[String(projectId)] || [];
-      map[String(projectId)] = list.filter((t) => t.id !== taskId);
-      saveMockTasksMap(map);
-      setTasks(map[String(projectId)]);
-      setInfo("Task deleted (mock).");
-      return;
-    }
-
     try {
       await api.delete(`/projects/${projectId}/tasks/${taskId}`);
       setInfo("Task deleted.");
@@ -423,17 +155,6 @@ export default function ProjectDetails() {
     clearMessages();
 
     if (!project) return;
-
-    if (MOCK_MODE) {
-      try {
-        const sim = simulateLocally(project, tasks);
-        setSimulation(sim);
-        setInfo("Simulation complete (mock).");
-      } catch (err) {
-        setError(err?.message || "Simulation failed (mock).");
-      }
-      return;
-    }
 
     try {
       const res = await api.post(`/projects/${projectId}/simulate`);

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import Sidebar from "../components/Sidebar";
 import api from "../api";
-import { MOCK_MODE } from "../config";
+import { useAuth } from "../context/AuthContext";
 
 import LineChart from "../components/charts/LineChart";
 import DonutChart from "../components/charts/DonutChart";
@@ -58,6 +58,7 @@ function StatCard({ title, value, tone = "indigo" }) {
 }
 
 export default function Dashboard() {
+  const { can } = useAuth();
   const navigate = useNavigate();
 
   const [error, setError] = useState("");
@@ -114,143 +115,26 @@ export default function Dashboard() {
     setError("");
     setLoading(true);
 
-    // ----------------------------------------------------------
-    // MOCK MODE
-    // ----------------------------------------------------------
-
-    if (MOCK_MODE) {
-      // Inventory
-      setInvSeries(
-        Array.from({ length: 14 }).map((_, i) => ({
-          label: `2026-08-${String(i + 1).padStart(2, "0")}`,
-          value: Math.max(
-            0,
-            Math.round(10 + Math.sin(i / 2) * 4 + (i % 3))
-          ),
-        }))
-      );
-
-      setInvAlerts({
-        exhausted: 1,
-        dead_stock: 1,
-        expiry_risk: 1,
-      });
-
-      // Accounts
-      setAcctOverview({
-        income: 120000,
-        expenses: 82000,
-        net: 38000,
-      });
-
-      // Organization
-      setOrgOverview({
-        total_employees: 18,
-
-        department_share: [
-          {
-            label: "Operations",
-            value: 8,
-            pct: 44.44,
-          },
-          {
-            label: "Warehouse",
-            value: 5,
-            pct: 27.78,
-          },
-          {
-            label: "Finance",
-            value: 3,
-            pct: 16.67,
-          },
-          {
-            label: "HR",
-            value: 2,
-            pct: 11.11,
-          },
-        ],
-
-        salary_stats: {
-          min: 32000,
-          max: 92000,
-          avg: 58500,
-          median: 56000,
-        },
-
-        top_executive: {
-          employee_id: "E100",
-          name: "Aarav Mehta",
-          salary: 92000,
-          job_role: "Plant Manager",
-          departments: ["Operations"],
-        },
-      });
-
-      // Delivery
-      setDeliverySeries(
-        Array.from({ length: 20 }).map((_, i) => ({
-          label: `2026-08-${String((i % 30) + 1).padStart(
-            2,
-            "0"
-          )}`,
-          value: Math.max(
-            0,
-            Math.round(14 + Math.sin(i / 2) * 6)
-          ),
-        }))
-      );
-
-      setLoading(false);
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // REAL API MODE
-    // ----------------------------------------------------------
+    // Only call endpoints this user may read; a missing permission (or one
+    // failing module) must not blank the whole dashboard.
+    const failures = [];
+    const get = (permission, url, params) =>
+      can(permission)
+        ? api.get(url, { params }).catch((e) => {
+            failures.push(extractErrorDetail(e));
+            return null;
+          })
+        : Promise.resolve(null);
 
     try {
-      const [
-        invSeriesRes,
-        invAlertsRes,
-        accountsRes,
-        orgRes,
-        deliveryRes,
-      ] = await Promise.all([
-        // Inventory consumption
-        api.get("/analytics/inventory/series", {
-          params: {
-            consumption_days: 14,
-            order_months: 6,
-          },
-        }),
-
-        // Inventory alerts
-        api.get("/analytics/inventory/alerts", {
-          params: {
-            dead_days: 30,
-            expiry_days: 14,
-            consumption_days: 14,
-          },
-        }),
-
-        // Accounts
-        api.get("/analytics/accounts/overview", {
-          params: {
-            days: 30,
-            top_n: 5,
-          },
-        }),
-
-        // Organization
-        api.get("/analytics/organization/overview", {
-          params: {
-            histogram_bins: 10,
-          },
-        }),
-
-        // Delivery
-        api.get("/analytics/delivery/overview"),
+      const [invSeriesRes, invAlertsRes, accountsRes, orgRes, deliveryRes] = await Promise.all([
+        get("inventory.read", "/analytics/inventory/series", { consumption_days: 14, order_months: 6 }),
+        get("inventory.read", "/analytics/inventory/alerts", { dead_days: 30, expiry_days: 14, consumption_days: 14 }),
+        get("accounts.read", "/analytics/accounts/overview", { days: 30, top_n: 5 }),
+        get("organization.read", "/analytics/organization/overview", { histogram_bins: 10 }),
+        get("delivery.read", "/analytics/delivery/overview"),
       ]);
+      if (failures.length) setError(failures[0]);
 
       // ----------------------------------------------------------
       // Inventory
@@ -266,7 +150,7 @@ export default function Dashboard() {
       // ----------------------------------------------------------
 
       const dailyConsumption =
-        invSeriesRes.data?.daily_consumption?.series || [];
+        invSeriesRes?.data?.daily_consumption?.series || [];
 
       setInvSeries(
         dailyConsumption.map((item) => ({
@@ -276,26 +160,13 @@ export default function Dashboard() {
       );
 
       // ----------------------------------------------------------
-      // Inventory alerts
-      //
-      // Backend returns COUNTS, not arrays:
-      //
-      // {
-      //   dead_stock_count,
-      //   near_expiry_count,
-      //   reorder_count
-      // }
-      //
-      // Dashboard terminology:
-      // exhausted -> reorder_count
-      // dead_stock -> dead_stock_count
-      // expiry_risk -> near_expiry_count
+      // Inventory alerts (counts; the analytics page shows the item lists)
       // ----------------------------------------------------------
 
-      const alerts = invAlertsRes.data || {};
+      const alerts = invAlertsRes?.data || {};
 
       setInvAlerts({
-        exhausted: Number(alerts.reorder_count || 0),
+        exhausted: Number(alerts.exhausted_count || 0),
         dead_stock: Number(alerts.dead_stock_count || 0),
         expiry_risk: Number(alerts.near_expiry_count || 0),
       });
@@ -312,7 +183,7 @@ export default function Dashboard() {
       // ----------------------------------------------------------
 
       const incomeExpenses =
-        accountsRes.data?.income_vs_expenses || {};
+        accountsRes?.data?.income_vs_expenses || {};
 
       setAcctOverview({
         income: Number(incomeExpenses.income || 0),
@@ -324,7 +195,7 @@ export default function Dashboard() {
       // Organization
       // ----------------------------------------------------------
 
-      setOrgOverview(orgRes.data || null);
+      setOrgOverview(orgRes?.data || null);
 
       // ----------------------------------------------------------
       // Delivery
@@ -333,7 +204,7 @@ export default function Dashboard() {
       // ----------------------------------------------------------
 
       const monthlyMovingAverage =
-        deliveryRes.data?.moving_average?.month?.series || [];
+        deliveryRes?.data?.moving_average?.month?.series || [];
 
       setDeliverySeries(
         monthlyMovingAverage.map((item) => ({
@@ -354,6 +225,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchSnapshots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ------------------------------------------------------------

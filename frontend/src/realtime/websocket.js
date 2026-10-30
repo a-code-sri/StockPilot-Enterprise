@@ -1,193 +1,117 @@
 import { WS_BASE_URL } from "../config";
+import { TOKEN_KEY } from "../api";
 
+/**
+ * Authenticated, auto-reconnecting WebSocket for server push events.
+ *
+ * Protocol: after the socket opens we send {"type":"auth","token":...}; the server
+ * answers {"type":"ready"} and then pushes events such as
+ * {"type":"analytics.updated","module":"inventory"}.
+ */
 class RealtimeSocket {
   constructor() {
     this.socket = null;
-
     this.listeners = new Set();
     this.statusListeners = new Set();
-
+    this.status = "disconnected";
     this.reconnectTimer = null;
     this.reconnectAttempts = 0;
-
     this.shouldReconnect = false;
   }
 
   connect() {
     this.shouldReconnect = true;
-
     if (
       this.socket &&
-      (
-        this.socket.readyState === WebSocket.OPEN ||
-        this.socket.readyState === WebSocket.CONNECTING
-      )
+      (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
 
-    const token = localStorage.getItem("token");
-
+    const token = localStorage.getItem(TOKEN_KEY);
     if (!token) {
       this.setStatus("unauthenticated");
       return;
     }
 
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
 
-    const url =
-      `${WS_BASE_URL}/ws/realtime?token=${encodeURIComponent(token)}`;
-
-    console.log("Connecting to realtime WebSocket...");
-
-    const socket = new WebSocket(url);
-
+    const socket = new WebSocket(`${WS_BASE_URL}/ws/realtime`);
     this.socket = socket;
     this.setStatus("connecting");
 
     socket.onopen = () => {
-      // Ignore callbacks from an old socket.
-      if (this.socket !== socket) {
-        return;
-      }
-
-      console.log("Realtime WebSocket connected");
-
-      this.reconnectAttempts = 0;
-      this.setStatus("connected");
+      if (this.socket !== socket) return;
+      socket.send(JSON.stringify({ type: "auth", token }));
     };
 
     socket.onmessage = (event) => {
-      // Ignore messages from an old socket.
-      if (this.socket !== socket) {
+      if (this.socket !== socket) return;
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
         return;
       }
-
-      try {
-        const message = JSON.parse(event.data);
-
-        console.log("Realtime event:", message);
-
-        for (const listener of this.listeners) {
-          listener(message);
-        }
-      } catch (error) {
-        console.error(
-          "Invalid realtime WebSocket message:",
-          error
-        );
+      if (message.type === "ready") {
+        this.reconnectAttempts = 0;
+        this.setStatus("connected");
+        return;
       }
+      for (const listener of this.listeners) listener(message);
     };
 
     socket.onclose = (event) => {
-      // Only clean up the currently active socket.
-      if (this.socket === socket) {
-        this.socket = null;
-      }
-
-      console.log(
-        "Realtime WebSocket closed:",
-        event.code,
-        event.reason
-      );
-
-      this.setStatus("disconnected");
-
-      if (this.shouldReconnect) {
-        this.scheduleReconnect();
-      }
-    };
-
-    socket.onerror = (error) => {
-      if (this.socket !== socket) {
+      if (this.socket === socket) this.socket = null;
+      // 1008 = policy violation (bad/expired token): don't hammer the server.
+      if (event.code === 1008) {
+        this.setStatus("unauthenticated");
         return;
       }
-
-      console.error(
-        "Realtime WebSocket error:",
-        error
-      );
+      this.setStatus("disconnected");
+      if (this.shouldReconnect) this.scheduleReconnect();
     };
+  }
+
+  reconnect() {
+    this.disconnect();
+    this.connect();
   }
 
   disconnect() {
     this.shouldReconnect = false;
-
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     const socket = this.socket;
     this.socket = null;
-
-    if (socket) {
-      socket.close(1000, "Client disconnected");
-    }
-
+    if (socket) socket.close(1000, "Client disconnected");
     this.setStatus("disconnected");
   }
 
   subscribe(listener) {
     this.listeners.add(listener);
-
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return () => this.listeners.delete(listener);
   }
 
   onStatusChange(listener) {
     this.statusListeners.add(listener);
-
-    return () => {
-      this.statusListeners.delete(listener);
-    };
+    listener(this.status);
+    return () => this.statusListeners.delete(listener);
   }
 
   setStatus(status) {
-    for (const listener of this.statusListeners) {
-      listener(status);
-    }
+    this.status = status;
+    for (const listener of this.statusListeners) listener(status);
   }
 
   scheduleReconnect() {
-    if (this.reconnectTimer) {
-      return;
-    }
-
-    if (!this.shouldReconnect) {
-      return;
-    }
-
-    const token = localStorage.getItem("token");
-
-    if (!token) {
-      this.setStatus("unauthenticated");
-      return;
-    }
-
-    const delay = Math.min(
-      1000 * 2 ** this.reconnectAttempts,
-      30000
-    );
-
-    console.log(
-      `Realtime WebSocket reconnecting in ${delay}ms`
-    );
-
+    if (this.reconnectTimer || !this.shouldReconnect) return;
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
     this.reconnectAttempts += 1;
-
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-
-      if (!this.shouldReconnect) {
-        return;
-      }
-
-      this.connect();
+      if (this.shouldReconnect) this.connect();
     }, delay);
   }
 }

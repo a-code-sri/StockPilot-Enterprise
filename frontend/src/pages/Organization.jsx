@@ -1,730 +1,302 @@
-import { useEffect, useMemo, useState } from "react";
-import Sidebar from "../components/Sidebar";
-import api from "../api";
+import { useCallback, useEffect, useState } from "react";
+import api, { errorMessage } from "../api";
+import { useAuth } from "../context/AuthContext";
 import OrgChart from "../components/OrgChart";
+import Pager from "../components/Pager";
+import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
+import { date, money } from "../lib/format";
 import "../styles/orgChart.css";
-import { MOCK_MODE } from "../config";
 
-const initialEmployeeForm = {
-  employee_id: "",
-  name: "",
-  salary: "",
-  job_role: "",
-  manager_employee_id: "",
-  departments: [],
-};
+const PAGE_SIZE = 100;
+const EMPTY = { employee_id: "", name: "", salary: "", job_role: "", manager_employee_id: "", departments: [] };
 
-export default function Organization() {
-  const [activeTab, setActiveTab] = useState("employees");
-
-  const [employees, setEmployees] = useState([]);
-  const [departments, setDepartments] = useState([]);
-
-  const [employeeForm, setEmployeeForm] = useState(initialEmployeeForm);
-  const [newDeptName, setNewDeptName] = useState("");
-
-  const [searchQ, setSearchQ] = useState("");
-  const [filterDept, setFilterDept] = useState("");
-  const [filterManager, setFilterManager] = useState("");
-
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  const [allEmployeesForChart, setAllEmployeesForChart] = useState([]);
-  // --------- Mock state (only used when MOCK_MODE = true)
-  const fetchAllEmployeesForHierarchy = async () => {
-    clearMessages();
-
-    if (MOCK_MODE) {
-      // Use full mock list (not filtered)
-      setAllEmployeesForChart(mockEmployees);
-      return;
-    }
-
-    try {
-      const res = await api.get("/organization/employees"); // no params => all
-      setAllEmployeesForChart(res.data);
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-  useEffect(() => {
-    if (activeTab === "hierarchy") {
-      fetchAllEmployeesForHierarchy();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
-  const [mockEmployees, setMockEmployees] = useState([
-    {
-      id: 1,
-      employee_id: "E100",
-      name: "Aarav Mehta",
-      salary: 90000,
-      job_role: "Plant Manager",
-      manager_employee_id: null,
-      departments: ["Operations"],
-      created_at: "2026-08-01T00:00:00Z",
-    },
-    {
-      id: 2,
-      employee_id: "E101",
-      name: "Sara Khan",
-      salary: 60000,
-      job_role: "Inventory Lead",
-      manager_employee_id: "E100",
-      departments: ["Operations", "Warehouse"],
-      created_at: "2026-08-02T00:00:00Z",
-    },
-  ]);
-
-  const [mockDepartments, setMockDepartments] = useState([
-    { id: 1, name: "Operations", created_at: "2026-08-01T00:00:00Z" },
-    { id: 2, name: "Warehouse", created_at: "2026-08-01T00:00:00Z" },
-    { id: 3, name: "Finance", created_at: "2026-08-01T00:00:00Z" },
-  ]);
-
-  const deptNames = useMemo(() => departments.map((d) => d.name), [departments]);
-
-  const clearMessages = () => {
-    setError("");
-    setInfo("");
-  };
-
-  const extractErrorDetail = (e) => {
-    const detail =
-      e?.response?.data?.detail ||
-      e?.message ||
-      "Something went wrong. Please try again.";
-    return typeof detail === "string" ? detail : JSON.stringify(detail);
-  };
-
-  // ---------- Load initial data
-  useEffect(() => {
-    (async () => {
-      await fetchDepartments();
-      await fetchEmployees();
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---------- API calls
-  const fetchDepartments = async () => {
-    clearMessages();
-
-    if (MOCK_MODE) {
-      setDepartments(mockDepartments);
-      return;
-    }
-
-    try {
-      const res = await api.get("/organization/departments");
-      setDepartments(res.data);
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const fetchEmployees = async () => {
-    clearMessages();
-
-    if (MOCK_MODE) {
-      // simple mock filtering consistent with backend query params
-      let rows = [...mockEmployees];
-
-      if (searchQ) {
-        const q = searchQ.toLowerCase();
-        rows = rows.filter(
-          (x) =>
-            x.employee_id.toLowerCase().includes(q) ||
-            x.name.toLowerCase().includes(q) ||
-            x.job_role.toLowerCase().includes(q)
+function DepartmentPicker({ all, value, onChange }) {
+  if (all.length === 0) return <p className="text-sm text-gray-500">No departments yet. Create one in the Departments tab.</p>;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {all.map((d) => {
+        const on = value.includes(d.name);
+        return (
+          <label key={d.id}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm cursor-pointer ${
+              on ? "bg-indigo-500/10 border-indigo-500/40" : "bg-gray-800 border-gray-700"
+            }`}>
+            <input type="checkbox" checked={on}
+              onChange={() => onChange(on ? value.filter((x) => x !== d.name) : [...value, d.name])} />
+            {d.name}
+          </label>
         );
-      }
+      })}
+    </div>
+  );
+}
 
-      if (filterManager) {
-        rows = rows.filter((x) => x.manager_employee_id === filterManager);
-      }
+function EmployeeForm({ departments, initial, editing, onSubmit, onCancel }) {
+  const [form, setForm] = useState(initial);
+  const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
-      if (filterDept) {
-        rows = rows.filter((x) => (x.departments || []).includes(filterDept));
-      }
-
-      setEmployees(rows);
-      return;
-    }
-
-    try {
-      const params = {};
-      if (searchQ) params.q = searchQ;
-      if (filterDept) params.department = filterDept;
-      if (filterManager) params.manager_employee_id = filterManager;
-
-      const res = await api.get("/organization/employees", { params });
-      setEmployees(res.data);
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const createDepartment = async () => {
-    clearMessages();
-
-    const name = newDeptName.trim();
-    if (!name) {
-      setError("Department name cannot be empty.");
-      return;
-    }
-
-    if (MOCK_MODE) {
-      const exists = mockDepartments.some(
-        (d) => d.name.toLowerCase() === name.toLowerCase()
-      );
-      if (exists) {
-        setError("Department already exists.");
-        return;
-      }
-
-      const created = {
-        id: mockDepartments.length + 1,
-        name,
-        created_at: new Date().toISOString(),
-      };
-      const updated = [created, ...mockDepartments];
-      setMockDepartments(updated);
-      setDepartments(updated);
-      setNewDeptName("");
-      setInfo("Department created (mock).");
-      return;
-    }
-
-    try {
-      await api.post("/organization/departments", { name });
-      setNewDeptName("");
-      setInfo("Department created.");
-      await fetchDepartments();
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const createEmployee = async () => {
-    clearMessages();
-
-    // Basic frontend checks (backend still enforces integrity constraints)
-    if (!employeeForm.employee_id.trim()) return setError("Employee ID is required.");
-    if (!employeeForm.name.trim()) return setError("Name is required.");
-    if (!employeeForm.job_role.trim()) return setError("Job role is required.");
-    if (employeeForm.salary === "") return setError("Salary is required.");
-
-    const salary = Number(employeeForm.salary);
-    if (Number.isNaN(salary) || salary < 0) return setError("Salary must be a non-negative number.");
-
-    if (
-      employeeForm.manager_employee_id &&
-      employeeForm.manager_employee_id.trim() === employeeForm.employee_id.trim()
-    ) {
-      return setError("Employee cannot be their own manager.");
-    }
-
-    if (MOCK_MODE) {
-      // simulate backend integrity checks
-      const empId = employeeForm.employee_id.trim();
-      const mgr = employeeForm.manager_employee_id.trim() || null;
-
-      const exists = mockEmployees.some((e) => e.employee_id === empId);
-      if (exists) return setError("Integrity error: employee_id must be unique and salary must be non-negative.");
-
-      if (mgr) {
-        const mgrExists = mockEmployees.some((e) => e.employee_id === mgr);
-        if (!mgrExists) return setError(`Manager with employee_id '${mgr}' does not exist.`);
-      }
-
-      for (const dept of employeeForm.departments) {
-        const deptExists = mockDepartments.some((d) => d.name === dept);
-        if (!deptExists) return setError(`Department '${dept}' does not exist. Create it first.`);
-      }
-
-      const created = {
-        id: mockEmployees.length + 1,
-        employee_id: empId,
-        name: employeeForm.name.trim(),
-        salary,
-        job_role: employeeForm.job_role.trim(),
-        manager_employee_id: mgr,
-        departments: employeeForm.departments,
-        created_at: new Date().toISOString(),
-      };
-
-      const updated = [created, ...mockEmployees];
-      setMockEmployees(updated);
-      setEmployees(updated);
-      setEmployeeForm(initialEmployeeForm);
-      setInfo("Employee created (mock).");
-      return;
-    }
-
-    try {
-      await api.post("/organization/employees", {
-        employee_id: employeeForm.employee_id.trim(),
-        name: employeeForm.name.trim(),
-        salary,
-        job_role: employeeForm.job_role.trim(),
-        manager_employee_id: employeeForm.manager_employee_id.trim() || null,
-        departments: employeeForm.departments,
-      });
-
-      setEmployeeForm(initialEmployeeForm);
-      setInfo("Employee created.");
-      await fetchEmployees();
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const deleteEmployee = async (employee_id) => {
-    clearMessages();
-
-    if (!employee_id) return;
-
-    if (MOCK_MODE) {
-      const updated = mockEmployees.filter((e) => e.employee_id !== employee_id);
-      setMockEmployees(updated);
-      setEmployees(updated);
-      setInfo("Employee deleted (mock).");
-      return;
-    }
-
-    try {
-      await api.delete(`/organization/employees/${employee_id}`);
-      setInfo("Employee deleted.");
-      await fetchEmployees();
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const toggleDeptInForm = (deptName) => {
-    setEmployeeForm((prev) => {
-      const exists = prev.departments.includes(deptName);
-      return {
-        ...prev,
-        departments: exists
-          ? prev.departments.filter((d) => d !== deptName)
-          : [...prev.departments, deptName],
-      };
-    });
+  const submit = (e) => {
+    e.preventDefault();
+    onSubmit(form);
   };
 
   return (
-    <div className="flex bg-gray-950 text-gray-200 min-h-screen">
-      <Sidebar />
-
-      <div className="flex-1 p-10">
-        <div className="flex items-start justify-between gap-6">
-          <div>
-            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent">
-              Organization Structure
-            </h1>
-            <p className="text-gray-400">
-              Employees, reporting hierarchy, and departments (integrity enforced).
-            </p>
-          </div>
-
-          <button
-            onClick={fetchEmployees}
-            className="bg-gray-900 border border-gray-800 hover:border-indigo-500/60 px-4 py-2 rounded-xl transition"
-          >
-            Refresh
-          </button>
-        </div>
-
-        {/* Alerts */}
-        {error && (
-          <div className="mt-6 bg-red-950/40 border border-red-900 text-red-200 px-4 py-3 rounded-xl">
-            <div className="font-semibold">Error</div>
-            <div className="text-sm mt-1">{error}</div>
-          </div>
-        )}
-        {info && (
-          <div className="mt-6 bg-emerald-950/30 border border-emerald-900 text-emerald-200 px-4 py-3 rounded-xl">
-            <div className="font-semibold">Success</div>
-            <div className="text-sm mt-1">{info}</div>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="flex mt-8 mb-8 space-x-8 border-b border-gray-800">
-          <button
-            onClick={() => setActiveTab("employees")}
-            className={`pb-2 ${
-              activeTab === "employees"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Employees
-          </button>
-
-          <button
-            onClick={() => setActiveTab("departments")}
-            className={`pb-2 ${
-              activeTab === "departments"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Departments
-          </button>
-          <button
-            onClick={() => setActiveTab("hierarchy")}
-            className={`pb-2 ${
-              activeTab === "hierarchy"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Hierarchy
-          </button>
-        </div>
-
-        {/* Employees Tab */}
-        {activeTab === "employees" && (
-          <>
-            {/* Search + Filters */}
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-12 lg:col-span-6">
-                  <label className="text-xs text-gray-400">Search</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="Search by employee_id / name / job role"
-                    value={searchQ}
-                    onChange={(e) => setSearchQ(e.target.value)}
-                  />
-                </div>
-
-                <div className="col-span-12 lg:col-span-3">
-                  <label className="text-xs text-gray-400">Department</label>
-                  <select
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    value={filterDept}
-                    onChange={(e) => setFilterDept(e.target.value)}
-                  >
-                    <option value="">All</option>
-                    {deptNames.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="col-span-12 lg:col-span-3">
-                  <label className="text-xs text-gray-400">Manager Employee ID</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="e.g. E100"
-                    value={filterManager}
-                    onChange={(e) => setFilterManager(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 flex gap-3">
-                <button
-                  onClick={fetchEmployees}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2.5 rounded-xl transition"
-                >
-                  Search
-                </button>
-
-                <button
-                  onClick={() => {
-                    setSearchQ("");
-                    setFilterDept("");
-                    setFilterManager("");
-                    setTimeout(fetchEmployees, 0);
-                  }}
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-5 py-2.5 rounded-xl transition"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            {/* Add Employee */}
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <h2 className="text-lg font-semibold mb-4">Add Employee</h2>
-
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-12 md:col-span-3">
-                  <label className="text-xs text-gray-400">Employee ID</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="E102"
-                    value={employeeForm.employee_id}
-                    onChange={(e) =>
-                      setEmployeeForm((p) => ({ ...p, employee_id: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 md:col-span-4">
-                  <label className="text-xs text-gray-400">Name</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="Full name"
-                    value={employeeForm.name}
-                    onChange={(e) =>
-                      setEmployeeForm((p) => ({ ...p, name: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 md:col-span-2">
-                  <label className="text-xs text-gray-400">Salary</label>
-                  <input
-                    type="number"
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="60000"
-                    value={employeeForm.salary}
-                    onChange={(e) =>
-                      setEmployeeForm((p) => ({ ...p, salary: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 md:col-span-3">
-                  <label className="text-xs text-gray-400">Job Role</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="Warehouse Supervisor"
-                    value={employeeForm.job_role}
-                    onChange={(e) =>
-                      setEmployeeForm((p) => ({ ...p, job_role: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 md:col-span-4">
-                  <label className="text-xs text-gray-400">Manager Employee ID (optional)</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="E100"
-                    value={employeeForm.manager_employee_id}
-                    onChange={(e) =>
-                      setEmployeeForm((p) => ({
-                        ...p,
-                        manager_employee_id: e.target.value,
-                      }))
-                    }
-                  />
-                  <p className="text-xs text-gray-500 mt-2">
-                    Must exist. Cannot be same as employee_id.
-                  </p>
-                </div>
-
-                <div className="col-span-12 md:col-span-8">
-                  <label className="text-xs text-gray-400">Departments</label>
-                  <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {deptNames.length === 0 ? (
-                      <div className="text-gray-500 text-sm col-span-12">
-                        No departments found. Create departments first.
-                      </div>
-                    ) : (
-                      deptNames.map((d) => {
-                        const checked = employeeForm.departments.includes(d);
-                        return (
-                          <label
-                            key={d}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition cursor-pointer ${
-                              checked
-                                ? "bg-indigo-500/10 border-indigo-500/40"
-                                : "bg-gray-800 border-gray-700 hover:border-gray-600"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleDeptInForm(d)}
-                            />
-                            <span className="text-sm">{d}</span>
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 flex gap-3">
-                <button
-                  onClick={createEmployee}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-6 py-2.5 rounded-xl transition"
-                >
-                  Add Employee
-                </button>
-                <button
-                  onClick={() => setEmployeeForm(initialEmployeeForm)}
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-6 py-2.5 rounded-xl transition"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            {/* Employees Table */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                  <tr>
-                    <th className="p-4">Employee ID</th>
-                    <th className="p-4">Name</th>
-                    <th className="p-4">Job Role</th>
-                    <th className="p-4">Salary</th>
-                    <th className="p-4">Manager</th>
-                    <th className="p-4">Departments</th>
-                    <th className="p-4">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {employees.map((e) => (
-                    <tr
-                      key={e.employee_id}
-                      className="border-t border-gray-800 hover:bg-gray-800/40 transition"
-                    >
-                      <td className="p-4 font-mono text-indigo-300">{e.employee_id}</td>
-                      <td className="p-4">{e.name}</td>
-                      <td className="p-4 text-gray-300">{e.job_role}</td>
-                      <td className="p-4">${e.salary}</td>
-                      <td className="p-4">{e.manager_employee_id || "-"}</td>
-                      <td className="p-4">
-                        <div className="flex flex-wrap gap-2">
-                          {(e.departments || []).map((d) => (
-                            <span
-                              key={`${e.employee_id}-${d}`}
-                              className="text-xs px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200"
-                            >
-                              {d}
-                            </span>
-                          ))}
-                          {(e.departments || []).length === 0 && (
-                            <span className="text-gray-500 text-sm">-</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <button
-                          onClick={() => deleteEmployee(e.employee_id)}
-                          className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded-xl transition"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {employees.length === 0 && (
-                    <tr>
-                      <td className="p-6 text-gray-500" colSpan={7}>
-                        No employees found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {/* Departments Tab */}
-        {activeTab === "departments" && (
-          <>
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <h2 className="text-lg font-semibold mb-4">Create Department</h2>
-
-              <div className="flex flex-wrap gap-3 items-center">
-                <input
-                  className="bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3 w-80"
-                  placeholder="e.g. Sales"
-                  value={newDeptName}
-                  onChange={(e) => setNewDeptName(e.target.value)}
-                />
-                <button
-                  onClick={createDepartment}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-xl transition"
-                >
-                  Create
-                </button>
-                <button
-                  onClick={fetchDepartments}
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-6 py-3 rounded-xl transition"
-                >
-                  Refresh
-                </button>
-              </div>
-
-              <p className="text-xs text-gray-500 mt-3">
-                Backend enforces uniqueness. If department exists, you’ll see an error.
-              </p>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                  <tr>
-                    <th className="p-4">Department Name</th>
-                    <th className="p-4">Created At</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {departments.map((d) => (
-                    <tr
-                      key={d.id}
-                      className="border-t border-gray-800 hover:bg-gray-800/40 transition"
-                    >
-                      <td className="p-4">{d.name}</td>
-                      <td className="p-4 text-gray-400">
-                        {String(d.created_at).slice(0, 19).replace("T", " ")}
-                      </td>
-                    </tr>
-                  ))}
-
-                  {departments.length === 0 && (
-                    <tr>
-                      <td className="p-6 text-gray-500" colSpan={2}>
-                        No departments found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-        {activeTab === "hierarchy" && (
-          <>
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-semibold">Organization Hierarchy</h2>
-                  <p className="text-sm text-gray-400 mt-1">
-                    Top executive(s) appear at the top (employees with no manager or missing manager).
-                  </p>
-                </div>
-
-                <button
-                  onClick={fetchAllEmployeesForHierarchy}
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-5 py-2.5 rounded-xl transition"
-                >
-                  Refresh Hierarchy
-                </button>
-              </div>
-            </div>
-
-            <OrgChart employees={allEmployeesForChart} />
-          </>
-        )}
+    <form onSubmit={submit} className="space-y-4">
+      <div className="flex flex-wrap gap-3">
+        <input className={inputClass} required maxLength={50} placeholder="Employee ID" value={form.employee_id}
+          disabled={editing} onChange={set("employee_id")} />
+        <input className={inputClass} required maxLength={200} placeholder="Full name" value={form.name} onChange={set("name")} />
+        <input className={`${inputClass} w-32`} required type="number" min="0" step="0.01" placeholder="Salary" value={form.salary} onChange={set("salary")} />
+        <input className={inputClass} required maxLength={200} placeholder="Job role" value={form.job_role} onChange={set("job_role")} />
+        <input className={inputClass} maxLength={50} placeholder="Manager employee ID (optional)" value={form.manager_employee_id ?? ""}
+          onChange={set("manager_employee_id")} />
       </div>
-    </div>
+      <DepartmentPicker all={departments} value={form.departments} onChange={(departments) => setForm({ ...form, departments })} />
+      <div className="flex gap-3">
+        <button className={buttonClass.primary}>{editing ? "Save changes" : "Add employee"}</button>
+        {onCancel && <button type="button" className={buttonClass.secondary} onClick={onCancel}>Cancel</button>}
+      </div>
+    </form>
+  );
+}
+
+export default function Organization() {
+  const { can } = useAuth();
+  const canWrite = can("organization.write");
+
+  const [tab, setTab] = useState("employees");
+  const [employees, setEmployees] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [departments, setDepartments] = useState([]);
+  const [chartEmployees, setChartEmployees] = useState([]);
+  const [filters, setFilters] = useState({ q: "", department: "", manager_employee_id: "" });
+  const [editing, setEditing] = useState(null);
+  const [formKey, setFormKey] = useState(0);
+  const [newDept, setNewDept] = useState("");
+  const [error, setError] = useState("");
+
+  const fetchDepartments = useCallback(async () => {
+    try {
+      setDepartments((await api.get("/organization/departments")).data);
+    } catch (err) {
+      setError(errorMessage(err, "Could not load departments"));
+    }
+  }, []);
+
+  const fetchEmployees = useCallback(async () => {
+    try {
+      const params = { limit: PAGE_SIZE, offset };
+      for (const [k, v] of Object.entries(filters)) if (v.trim()) params[k] = v.trim();
+      const res = await api.get("/organization/employees", { params });
+      setEmployees(res.data);
+      setTotal(Number(res.headers["x-total-count"] ?? res.data.length));
+    } catch (err) {
+      setError(errorMessage(err, "Could not load employees"));
+    }
+  }, [filters, offset]);
+
+  useEffect(() => {
+    fetchDepartments();
+  }, [fetchDepartments]);
+
+  useEffect(() => {
+    const t = setTimeout(fetchEmployees, 250);
+    return () => clearTimeout(t);
+  }, [fetchEmployees]);
+
+  useEffect(() => {
+    if (tab !== "hierarchy") return;
+    api.get("/organization/employees", { params: { limit: 1000 } })
+      .then((r) => setChartEmployees(r.data))
+      .catch((err) => setError(errorMessage(err, "Could not load hierarchy")));
+  }, [tab]);
+
+  const reloadAll = () => {
+    fetchEmployees();
+    fetchDepartments();
+  };
+
+  const saveEmployee = async (form) => {
+    setError("");
+    const body = {
+      name: form.name.trim(),
+      salary: Number(form.salary),
+      job_role: form.job_role.trim(),
+      manager_employee_id: (form.manager_employee_id || "").trim() || null,
+      departments: form.departments,
+    };
+    try {
+      if (editing) {
+        await api.put(`/organization/employees/${encodeURIComponent(editing.employee_id)}`, body);
+        setEditing(null);
+      } else {
+        await api.post("/organization/employees", { ...body, employee_id: form.employee_id.trim() });
+        setFormKey((k) => k + 1); // reset the create form
+      }
+      reloadAll();
+    } catch (err) {
+      setError(errorMessage(err, "Could not save employee"));
+    }
+  };
+
+  const deleteEmployee = async (emp) => {
+    if (!window.confirm(`Delete ${emp.name} (${emp.employee_id})? Their reports will have no manager.`)) return;
+    try {
+      await api.delete(`/organization/employees/${encodeURIComponent(emp.employee_id)}`);
+      reloadAll();
+    } catch (err) {
+      setError(errorMessage(err, "Could not delete employee"));
+    }
+  };
+
+  const createDepartment = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/organization/departments", { name: newDept.trim() });
+      setNewDept("");
+      fetchDepartments();
+    } catch (err) {
+      setError(errorMessage(err, "Could not create department"));
+    }
+  };
+
+  const deleteDepartment = async (d) => {
+    if (!window.confirm(`Delete department "${d.name}"?`)) return;
+    try {
+      await api.delete(`/organization/departments/${encodeURIComponent(d.name)}`);
+      fetchDepartments();
+    } catch (err) {
+      setError(errorMessage(err, "Could not delete department"));
+    }
+  };
+
+  const setFilter = (field) => (e) => {
+    setFilters({ ...filters, [field]: e.target.value });
+    setOffset(0);
+  };
+
+  return (
+    <Page title="Organization" subtitle="Employees, departments and reporting lines">
+      <ErrorBanner message={error} onClose={() => setError("")} />
+
+      <div role="tablist" className="flex mb-6 gap-6 border-b border-gray-800">
+        {[["employees", "Employees"], ["departments", "Departments"], ["hierarchy", "Hierarchy"]].map(([id, text]) => (
+          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+            className={`pb-2 ${tab === id ? "border-b-2 border-indigo-500 text-indigo-300" : "text-gray-400"}`}>
+            {text}
+          </button>
+        ))}
+      </div>
+
+      {tab === "employees" && (
+        <>
+          {canWrite && (
+            <Panel title={editing ? `Edit ${editing.name}` : "Add employee"} className="mb-6">
+              <EmployeeForm
+                key={editing ? `edit-${editing.employee_id}` : `new-${formKey}`}
+                departments={departments}
+                editing={Boolean(editing)}
+                initial={editing ? { ...editing, salary: String(editing.salary) } : EMPTY}
+                onSubmit={saveEmployee}
+                onCancel={editing ? () => setEditing(null) : null}
+              />
+            </Panel>
+          )}
+
+          <div className="flex flex-wrap gap-3 mb-4">
+            <input className={`${inputClass} w-72`} placeholder="Search ID, name or role" value={filters.q} onChange={setFilter("q")} aria-label="Search" />
+            <select className={inputClass} value={filters.department} onChange={setFilter("department")} aria-label="Department">
+              <option value="">All departments</option>
+              {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+            </select>
+            <input className={inputClass} placeholder="Reports to (employee ID)" value={filters.manager_employee_id}
+              onChange={setFilter("manager_employee_id")} aria-label="Manager" />
+          </div>
+
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-800 text-gray-400 text-xs uppercase text-left">
+                <tr>
+                  <th className="p-3">ID</th><th className="p-3">Name</th><th className="p-3">Role</th>
+                  <th className="p-3 text-right">Salary</th><th className="p-3">Manager</th><th className="p-3">Departments</th>
+                  {canWrite && <th className="p-3" />}
+                </tr>
+              </thead>
+              <tbody>
+                {employees.length === 0 && (
+                  <tr><td colSpan={7} className="p-6 text-center text-gray-500">No employees found.</td></tr>
+                )}
+                {employees.map((e) => (
+                  <tr key={e.employee_id} className="border-t border-gray-800 hover:bg-gray-800/40">
+                    <td className="p-3 font-mono text-indigo-300">{e.employee_id}</td>
+                    <td className="p-3">{e.name}</td>
+                    <td className="p-3 text-gray-300">{e.job_role}</td>
+                    <td className="p-3 text-right">{money(e.salary)}</td>
+                    <td className="p-3">{e.manager_employee_id || "—"}</td>
+                    <td className="p-3">
+                      <div className="flex flex-wrap gap-1">
+                        {e.departments.map((d) => (
+                          <span key={d} className="text-xs px-2 py-0.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200">{d}</span>
+                        ))}
+                      </div>
+                    </td>
+                    {canWrite && (
+                      <td className="p-3 whitespace-nowrap text-right space-x-2">
+                        <button className={buttonClass.small} onClick={() => { setEditing(e); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button>
+                        <button className={buttonClass.danger} onClick={() => deleteEmployee(e)}>Delete</button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager offset={offset} limit={PAGE_SIZE} total={total} onChange={setOffset} />
+        </>
+      )}
+
+      {tab === "departments" && (
+        <>
+          {canWrite && (
+            <Panel title="Create department" className="mb-6">
+              <form onSubmit={createDepartment} className="flex gap-3">
+                <input className={`${inputClass} w-80`} required minLength={2} maxLength={100} placeholder="e.g. Sales"
+                  value={newDept} onChange={(e) => setNewDept(e.target.value)} />
+                <button className={buttonClass.primary}>Create</button>
+              </form>
+            </Panel>
+          )}
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-800 text-gray-400 text-xs uppercase text-left">
+                <tr><th className="p-3">Department</th><th className="p-3 text-right">Headcount</th><th className="p-3">Created</th>{canWrite && <th className="p-3" />}</tr>
+              </thead>
+              <tbody>
+                {departments.length === 0 && (
+                  <tr><td colSpan={4} className="p-6 text-center text-gray-500">No departments.</td></tr>
+                )}
+                {departments.map((d) => (
+                  <tr key={d.id} className="border-t border-gray-800">
+                    <td className="p-3">{d.name}</td>
+                    <td className="p-3 text-right">{d.headcount}</td>
+                    <td className="p-3 text-gray-400">{date(d.created_at)}</td>
+                    {canWrite && (
+                      <td className="p-3 text-right">
+                        <button className={buttonClass.danger} disabled={d.headcount > 0}
+                          title={d.headcount > 0 ? "Reassign its employees first" : undefined}
+                          onClick={() => deleteDepartment(d)}>Delete</button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {tab === "hierarchy" && <OrgChart employees={chartEmployees} />}
+    </Page>
   );
 }

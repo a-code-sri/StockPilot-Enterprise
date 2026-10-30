@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import api from "../api";
-import { MOCK_MODE } from "../config";
 import DonutChart from "../components/charts/DonutChart";
-import { useRealtime } from "../realtime/RealtimeProvider";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
+import { InsightsPanel } from "../components/ui";
+import { money as formatMoney } from "../lib/format";
 
 function Panel({ title, subtitle, right, children }) {
   return (
@@ -158,14 +159,13 @@ function RankingList({
 }
 
 export default function AccountsAnalytics() {
-  const { lastEvent } = useRealtime();
-  console.log("AccountsAnalytics mounted/rendered", lastEvent);
   const [days, setDays] = useState(30);
   const [topN, setTopN] = useState(5);
 
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [anomalies, setAnomalies] = useState(null);
 
   const extractErrorDetail = (e) => {
     return (
@@ -180,75 +180,6 @@ export default function AccountsAnalytics() {
     setError("");
 
     try {
-      if (MOCK_MODE) {
-        setData({
-          window_days: days,
-
-          income_vs_expenses: {
-            income: 120000,
-            expenses: 82000,
-            net: 38000,
-          },
-
-          income_by_category: [
-            { category: "delivery", amount: 75000 },
-            { category: "accounts", amount: 18000 },
-            { category: "projects", amount: 14000 },
-            { category: "misc", amount: 13000 },
-          ],
-
-          expense_by_category: [
-            { category: "inventory", amount: 42000 },
-            { category: "payroll", amount: 28000 },
-            { category: "delivery", amount: 8000 },
-            { category: "projects", amount: 4000 },
-          ],
-
-          rankings: {
-            top_income_sources: [
-              { source: "Client A", amount: 40000 },
-              { source: "Client B", amount: 22000 },
-              { source: "Marketplace", amount: 13000 },
-              { source: "Retail", amount: 9000 },
-              { source: "Client C", amount: 7000 },
-            ],
-
-            top_expense_targets: [
-              { target: "Steel Supplier", amount: 24000 },
-              { target: "Payroll", amount: 28000 },
-              { target: "Transport Partner", amount: 6000 },
-              { target: "Rent", amount: 5000 },
-              { target: "Packaging Vendor", amount: 4000 },
-            ],
-          },
-
-          liquidity: {
-            score_30d: {
-              days: 30,
-              score: 78.4,
-              current_balance: 150000,
-              net: 38000,
-              total_credit: 120000,
-              total_debit: 82000,
-              avg_daily_debit: 2733.33,
-              buffer_days: 54.87,
-            },
-
-            score_365d: {
-              days: 365,
-              score: 66.2,
-              current_balance: 150000,
-              net: 90000,
-              total_credit: 960000,
-              total_debit: 870000,
-              avg_daily_debit: 2383.56,
-              buffer_days: 62.93,
-            },
-          },
-        });
-
-        return;
-      }
 
       const res = await api.get(
         "/analytics/accounts/overview",
@@ -261,6 +192,8 @@ export default function AccountsAnalytics() {
       );
 
       setData(res.data);
+      const an = await api.get("/analytics/accounts/anomalies", { params: { days: Math.max(days, 90) } });
+      setAnomalies(an.data);
     } catch (e) {
       setError(extractErrorDetail(e));
     } finally {
@@ -275,16 +208,7 @@ export default function AccountsAnalytics() {
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days, topN]);
-  useEffect(() => {
-    if (
-      lastEvent?.type === "analytics.updated" &&
-      lastEvent?.module === "accounts"
-    ) {
-      console.log("Received realtime analytics....")
-      fetchOverview();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent]);
+  useAnalyticsRefresh("accounts", fetchOverview);
   const income =
     data?.income_vs_expenses?.income ?? 0;
 
@@ -309,8 +233,7 @@ export default function AccountsAnalytics() {
   const titleGradient =
     "bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent";
 
-  const money = (value) =>
-    `$${Math.round(Number(value || 0)).toLocaleString()}`;
+  const money = formatMoney;
 
   return (
     <div className="flex bg-gray-950 text-gray-200 min-h-screen">
@@ -369,6 +292,8 @@ export default function AccountsAnalytics() {
 
           </div>
         </div>
+
+        <div className="mt-8"><InsightsPanel module="accounts" /></div>
 
         {/* Error */}
         {error && (
@@ -557,6 +482,32 @@ export default function AccountsAnalytics() {
                 </Panel>
               </div>
 
+            </div>
+
+            <div className="mt-8">
+              <Panel
+                title="Unusual transactions"
+                subtitle={anomalies ? `Outliers among ${anomalies.scanned} transactions in the last ${anomalies.window_days} days, compared within each category` : "Scanning…"}
+              >
+                <ul className="space-y-2 text-sm">
+                  {(anomalies?.anomalies || []).map((a) => (
+                    <li key={a.transaction_id} className="flex justify-between gap-4 border-b border-gray-800 pb-2">
+                      <span>
+                        <span className={a.transaction_type === "credit" ? "text-emerald-300" : "text-red-300"}>
+                          {money(a.amount)}
+                        </span>{" "}
+                        <span className="text-gray-300">{a.category}</span>
+                        <span className="text-gray-500"> · {a.source_target} · {new Date(a.date).toLocaleDateString()}</span>
+                        <span className="block text-xs text-gray-500">{a.reason}</span>
+                      </span>
+                      <span className="text-xs text-yellow-300 whitespace-nowrap">score {a.score}</span>
+                    </li>
+                  ))}
+                  {anomalies && anomalies.anomalies.length === 0 && (
+                    <li className="text-gray-500">No unusual transactions detected.</li>
+                  )}
+                </ul>
+              </Panel>
             </div>
           </>
         )}

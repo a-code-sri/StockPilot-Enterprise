@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import string
 from datetime import date, timedelta
@@ -20,7 +21,7 @@ st.set_page_config(
     layout="wide",
 )
 
-DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_BACKEND_URL = os.getenv("STOCKPILOT_API_URL", "http://127.0.0.1:8000")
 
 
 # ============================================================
@@ -195,6 +196,25 @@ def make_inventory_name(prefix: str = "Enterprise Item") -> str:
     return f"{prefix} {random_suffix()}"
 
 
+def inventory_path(name: str, suffix: str = "") -> str | None:
+    """
+    The API addresses inventory items by id. Resolve an item name (as typed or
+    remembered by this simulator) to `/inventory/{id}{suffix}`; None if not found.
+    """
+    ok, payload = api_request(
+        "GET",
+        "/inventory/",
+        params={"search": name, "limit": 50},
+        operation=f"Look up inventory '{name}'",
+    )
+    if ok:
+        for item in payload:
+            if item.get("name") == name:
+                return f"/inventory/{item['id']}{suffix}"
+    st.error(f"Inventory item '{name}' was not found.")
+    return None
+
+
 def make_order_id() -> str:
     return f"ACME-ORD-{random_suffix(8)}"
 
@@ -359,7 +379,9 @@ if not st.session_state.token:
 
         st.info(
             "Register a dedicated simulator user if you do not "
-            "already have an account."
+            "already have an account. New users have no role: an "
+            "admin must assign one on the web app's Users & Roles "
+            "page (or sign in here as the bootstrap admin)."
         )
 
         with st.form("register_form"):
@@ -530,7 +552,7 @@ Watch Project Analytics if its projection is wired to realtime events.
 
         api_request(
             "PUT",
-            f"/inventory/{inventory_name}",
+            inventory_path(inventory_name) or "/inventory/0",
             json_body={
                 "quantity": 15,
                 "action": "consume",
@@ -704,7 +726,7 @@ Watch Project Analytics if its projection is wired to realtime events.
 
         api_request(
             "PUT",
-            f"/inventory/{inventory_name}/status",
+            inventory_path(inventory_name, "/status") or "/inventory/0/status",
             json_body={
                 "status": "ordered",
             },
@@ -839,6 +861,7 @@ with tabs[1]:
                 "consume",
                 "deliver",
                 "order",
+                "return",
             ],
         )
 
@@ -854,9 +877,10 @@ with tabs[1]:
             use_container_width=True,
         ):
 
-            success, payload = api_request(
+            path = inventory_path(existing_name)
+            success, payload = (False, "Not found") if not path else api_request(
                 "PUT",
-                f"/inventory/{existing_name}",
+                path,
                 json_body={
                     "quantity": inventory_quantity,
                     "action": inventory_action,
@@ -887,9 +911,10 @@ with tabs[1]:
             use_container_width=True,
         ):
 
-            success, payload = api_request(
+            path = inventory_path(existing_name, "/status")
+            success, payload = (False, "Not found") if not path else api_request(
                 "PUT",
-                f"/inventory/{existing_name}/status",
+                path,
                 json_body={
                     "status": new_status,
                 },
@@ -907,9 +932,10 @@ with tabs[1]:
             use_container_width=True,
         ):
 
-            success, payload = api_request(
+            path = inventory_path(existing_name)
+            success, payload = (False, "Not found") if not path else api_request(
                 "DELETE",
-                f"/inventory/{existing_name}",
+                path,
                 operation="Delete inventory",
             )
 
