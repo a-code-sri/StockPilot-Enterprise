@@ -103,7 +103,9 @@ def rebuild_project(db: Session, project_id: int) -> None:
 
 
 def rebuild_portfolio(db: Session, top_n: int = DEFAULT_TOP_N) -> None:
-    snaps = [s for (s,) in db.query(ProjectSnapshot.snapshot).all()]
+    # Skip malformed/legacy rows rather than failing the whole portfolio.
+    required = ("project_id", "title", "deadline", "schedule", "task_count")
+    snaps = [s for (s,) in db.query(ProjectSnapshot.snapshot).all() if all(k in (s or {}) for k in required)]
     today = utctoday().isoformat()
     upcoming = sorted(
         (

@@ -214,7 +214,9 @@ class InventoryAnalyticsService:
         window (robust z-score over that item's daily totals, zero days included).
         """
         start = utctoday() - timedelta(days=days - 1)
-        day_bucket = func.date_trunc("day", InventoryLogModel.timestamp)
+        # timezone('UTC', ts) -> UTC wall-clock time, so buckets are UTC days whatever
+        # the database server's TimeZone setting is (matches the projections).
+        day_bucket = func.date_trunc("day", func.timezone("UTC", InventoryLogModel.timestamp))
         rows = (
             self.db.query(InventoryLogModel.item_id, day_bucket, func.sum(InventoryLogModel.quantity))
             .filter(
