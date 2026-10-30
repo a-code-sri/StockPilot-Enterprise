@@ -1,271 +1,91 @@
+"""
+Outbox handlers for delivery projections.
+
+Projection semantics (all days are UTC):
+  - delivery_daily_status_counts: for orders CREATED on `day`, how many are
+    currently in each status. Creation adds +1 'pending'; each change A->B moves
+    one order from A to B on the order's creation day.
+  - delivery_daily_item_counts: units ordered per product, counted ONCE per order
+    on its creation day (previously re-added on every status change).
+  - delivery_daily_counts / delivery_daily_hour_counts: deliveries completed per
+    day and per hour of day, keyed by when the delivery happened.
+"""
+
 import logging
-from datetime import datetime, date, timezone
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from backend.core.time import parse_iso_datetime, utcnow
 from backend.modules.delivery.infrastructure.projections import (
     DeliveryDailyCounts,
-    DeliveryDailyStatusCounts,
-    DeliveryDailyItemCounts,
     DeliveryDailyHourCounts,
+    DeliveryDailyItemCounts,
+    DeliveryDailyStatusCounts,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_datetime(
-    payload: dict[str, Any],
-) -> datetime:
-    raw = (
-        payload.get("timestamp")
-        or payload.get("delivered_at")
-        or payload.get("date")
-        or payload.get("day")
+def _upsert_counter(db: Session, model, keys: dict, column: str, delta: int) -> None:
+    stmt = pg_insert(model).values(**keys, **{column: delta})
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[getattr(model, k) for k in keys],
+        set_={column: getattr(model, column) + getattr(stmt.excluded, column), "updated_at": func.now()},
     )
-
-    if isinstance(raw, datetime):
-        return raw
-
-    if isinstance(raw, date):
-        return datetime(
-            raw.year,
-            raw.month,
-            raw.day,
-            tzinfo=timezone.utc,
-        )
-
-    if isinstance(raw, str):
-        value = raw.strip()
-
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-
-        try:
-            parsed = datetime.fromisoformat(value)
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-
-            return parsed
-        except Exception:
-            pass
-
-    return datetime.now(timezone.utc)
-
-
-def _parse_day(
-    payload: dict[str, Any],
-) -> date:
-    return _parse_datetime(payload).date()
-
-
-def _upsert_delivered_count(
-    db: Session,
-    day: date,
-) -> None:
-    stmt = pg_insert(DeliveryDailyCounts).values(
-        day=day,
-        delivered_count=1,
-    ).on_conflict_do_update(
-        index_elements=[DeliveryDailyCounts.day],
-        set_={
-            "delivered_count": (
-                DeliveryDailyCounts.delivered_count + 1
-            ),
-            "updated_at": func.now(),
-        },
-    )
-
     db.execute(stmt)
 
 
-def _upsert_status_count(
-    db: Session,
-    day: date,
-    status: str,
-) -> None:
-    stmt = pg_insert(
-        DeliveryDailyStatusCounts
-    ).values(
-        day=day,
-        status=status,
-        count=1,
-    ).on_conflict_do_update(
-        index_elements=[
-            DeliveryDailyStatusCounts.day,
-            DeliveryDailyStatusCounts.status,
-        ],
-        set_={
-            "count": (
-                DeliveryDailyStatusCounts.count + 1
-            ),
-            "updated_at": func.now(),
-        },
-    )
-
-    db.execute(stmt)
+def add_status(db: Session, day: date, status: str, delta: int) -> None:
+    _upsert_counter(db, DeliveryDailyStatusCounts, {"day": day, "status": status}, "count", delta)
 
 
-def _upsert_item_count(
-    db: Session,
-    day: date,
-    product_name: str,
-    quantity: int,
-) -> None:
-    stmt = pg_insert(
-        DeliveryDailyItemCounts
-    ).values(
-        day=day,
-        product_name=product_name,
-        quantity=quantity,
-    ).on_conflict_do_update(
-        index_elements=[
-            DeliveryDailyItemCounts.day,
-            DeliveryDailyItemCounts.product_name,
-        ],
-        set_={
-            "quantity": (
-                DeliveryDailyItemCounts.quantity + quantity
-            ),
-            "updated_at": func.now(),
-        },
-    )
-
-    db.execute(stmt)
+def add_item(db: Session, day: date, product_name: str, quantity: int) -> None:
+    _upsert_counter(db, DeliveryDailyItemCounts, {"day": day, "product_name": product_name}, "quantity", quantity)
 
 
-def _upsert_delivery_hour(
-    db: Session,
-    day: date,
-    hour: int,
-) -> None:
-    stmt = pg_insert(
-        DeliveryDailyHourCounts
-    ).values(
-        day=day,
-        hour=hour,
-        count=1,
-    ).on_conflict_do_update(
-        index_elements=[
-            DeliveryDailyHourCounts.day,
-            DeliveryDailyHourCounts.hour,
-        ],
-        set_={
-            "count": (
-                DeliveryDailyHourCounts.count + 1
-            ),
-            "updated_at": func.now(),
-        },
-    )
-
-    db.execute(stmt)
+def add_delivered(db: Session, day: date, hour: int) -> None:
+    _upsert_counter(db, DeliveryDailyCounts, {"day": day}, "delivered_count", 1)
+    _upsert_counter(db, DeliveryDailyHourCounts, {"day": day, "hour": hour}, "count", 1)
 
 
-def handle_delivery_changed(
-    db: Session,
-    payload: dict[str, Any],
-    outbox_id: int,
-) -> None:
-    event_time = _parse_datetime(payload)
-    day = event_time.date()
+def handle_delivery_changed(db: Session, payload: dict[str, Any], outbox_id: int) -> None:
+    event_time = parse_iso_datetime(payload.get("timestamp")) or utcnow()
+    created = parse_iso_datetime(payload.get("created_at")) or event_time
+    created_day = created.date()
 
-    status = str(
-        payload.get("to_status") or ""
-    ).strip().lower()
+    from_status = str(payload.get("from_status") or "").strip().lower()
+    to_status = str(payload.get("to_status") or "").strip().lower()
 
-    logger.info(
-        "delivery analytics: delivery_changed "
-        "outbox_id=%s day=%s status=%s",
-        outbox_id,
-        day,
-        status,
-    )
+    logger.info("delivery: changed outbox_id=%s %s -> %s", outbox_id, from_status or "(new)", to_status)
 
-    if status:
-        _upsert_status_count(
-            db,
-            day,
-            status,
-        )
+    if from_status:
+        add_status(db, created_day, from_status, -1)
+    if to_status:
+        add_status(db, created_day, to_status, +1)
 
-    items = payload.get("items") or []
+    if not from_status:
+        for item in payload.get("items") or []:
+            name = str(item.get("product_name") or "").strip()
+            try:
+                qty = int(item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if name and qty > 0:
+                add_item(db, created_day, name, qty)
 
-    for item in items:
-        product_name = str(
-            item.get("product_name") or ""
-        ).strip()
-
-        if not product_name:
-            continue
-
-        try:
-            quantity = int(
-                item.get("quantity") or 0
-            )
-        except Exception:
-            quantity = 0
-
-        if quantity <= 0:
-            continue
-
-        _upsert_item_count(
-            db,
-            day,
-            product_name,
-            quantity,
-        )
-
-    if status == "delivered":
-        _upsert_delivered_count(
-            db,
-            day,
-        )
-
-        _upsert_delivery_hour(
-            db,
-            day,
-            event_time.hour,
-        )
+    if to_status == "delivered":
+        add_delivered(db, event_time.date(), event_time.hour)
 
 
-def handle_delivery_delivered(
-    db: Session,
-    payload: dict[str, Any],
-    outbox_id: int,
-) -> None:
-    """
-    Compatibility handler for existing delivery_delivered
-    outbox events created before the delivery_changed event
-    was introduced.
-    """
-
-    day = _parse_day(payload)
-
-    logger.info(
-        "delivery analytics: delivery_delivered "
-        "outbox_id=%s day=%s",
-        outbox_id,
-        day,
-    )
-
-    _upsert_delivered_count(
-        db,
-        day,
-    )
+def handle_delivery_delivered(db: Session, payload: dict[str, Any], outbox_id: int) -> None:
+    """Legacy event type from older versions; only counts the delivery."""
+    when = parse_iso_datetime(payload.get("delivered_at") or payload.get("date")) or utcnow()
+    add_delivered(db, when.date(), when.hour)
 
 
-def handle_event(
-    db: Session,
-    event_type: str,
-    payload: dict[str, Any],
-    outbox_id: int,
-) -> None:
-    logger.warning(
-        "delivery analytics: unhandled event '%s' "
-        "(outbox_id=%s)",
-        event_type,
-        outbox_id,
-    )
+def handle_event(db: Session, event_type: str, payload: dict[str, Any], outbox_id: int) -> None:
+    logger.warning("delivery analytics: unhandled event '%s' (outbox_id=%s)", event_type, outbox_id)

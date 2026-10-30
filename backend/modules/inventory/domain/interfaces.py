@@ -4,22 +4,23 @@ from abc import ABC, abstractmethod
 class InventoryRepositoryInterface(ABC):
 
     @abstractmethod
-    def create_item(self, item):
+    def add_item(self, item):
         pass
 
     @abstractmethod
-    def get_item_by_name(self, name: str):
+    def get_item(self, item_id: int, *, for_update: bool = False):
         pass
 
     @abstractmethod
-    def update_item(self, item):
+    def get_item_by_name(self, name: str, *, for_update: bool = False):
         pass
 
     @abstractmethod
-    def log_history(self, log):
+    def add_log(self, item_id: int, action: str, quantity, detail=None):
         pass
+
     @abstractmethod
-    def list_items(self, status: str = None):
+    def list_items(self, *, status=None, search=None, limit: int, offset: int):
         pass
 
     @abstractmethod
@@ -27,5 +28,5 @@ class InventoryRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def get_logs(self, item_id: int):
+    def get_logs(self, item_id: int, *, limit: int):
         pass

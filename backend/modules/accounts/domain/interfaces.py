@@ -8,11 +8,11 @@ class AccountsRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def delete_transaction(self, transaction_id: int):
+    def delete_transaction(self, transaction_id: int) -> bool:
         pass
 
     @abstractmethod
-    def list_transactions(self):
+    def list_transactions(self, *, limit: int, offset: int, transaction_type=None, category=None):
         pass
 
     @abstractmethod

@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
 
 
 class DeliveryRepositoryInterface(ABC):
 
     @abstractmethod
-    def create_delivery(self, order_id: str, customer_id: str, status: str, remarks: str | None):
+    def create_delivery(self, order_id: str, customer_id: str, remarks: str | None):
         pass
 
     @abstractmethod
@@ -13,19 +12,11 @@ class DeliveryRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def get_by_order_id(self, order_id: str):
+    def get_by_order_id(self, order_id: str, *, for_update: bool = False):
         pass
 
     @abstractmethod
-    def list_deliveries(self, statuses: list[str]):
-        pass
-
-    @abstractmethod
-    def update_status(self, delivery_model, new_status: str):
-        pass
-
-    @abstractmethod
-    def set_completed(self, delivery_model):
+    def list_deliveries(self, statuses: list[str], *, limit: int, offset: int):
         pass
 
     @abstractmethod
@@ -33,7 +24,7 @@ class DeliveryRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def add_log(self, delivery_db_id: int, from_status: str | None, to_status: str, remark: str | None):
+    def add_log(self, *, delivery_db_id: int, from_status: str | None, to_status: str, remark: str | None):
         pass
 
     @abstractmethod

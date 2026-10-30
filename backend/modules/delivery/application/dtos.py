@@ -1,26 +1,29 @@
 from datetime import datetime
-from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from decimal import Decimal
+from typing import List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DeliveryItemCreateDTO(BaseModel):
     product_name: str = Field(min_length=1, max_length=200)
     quantity: int = Field(gt=0)
-    unit_price: float = Field(ge=0)
+    unit_price: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    # Link to an inventory item. If omitted, an inventory item with exactly the
+    # same name is linked automatically; unlinked items do not touch stock.
+    inventory_item_id: Optional[int] = None
 
 
 class DeliveryCreateDTO(BaseModel):
     order_id: str = Field(min_length=1, max_length=80)
     customer_id: str = Field(min_length=1, max_length=80)
-    items: List[DeliveryItemCreateDTO]
-    remarks: Optional[str] = None
+    items: List[DeliveryItemCreateDTO] = Field(min_length=1)
+    remarks: Optional[str] = Field(default=None, max_length=1000)
 
 
 class DeliveryStatusUpdateDTO(BaseModel):
-    status: Literal[
-        "pending", "packed", "out_for_delivery", "delivered", "failed", "cancelled"
-    ]
-    remark: Optional[str] = None
+    status: Literal["pending", "packed", "out_for_delivery", "delivered", "failed", "cancelled"]
+    remark: Optional[str] = Field(default=None, max_length=1000)
 
 
 class DeliveryListDTO(BaseModel):
@@ -33,6 +36,14 @@ class DeliveryListDTO(BaseModel):
     updated_at: datetime
     completed_at: Optional[datetime] = None
     items_count: int
+    allowed_next: List[str] = []
+
+
+class DeliveryItemDTO(BaseModel):
+    product_name: str
+    quantity: int
+    unit_price: float
+    inventory_item_id: Optional[int] = None
 
 
 class DeliveryDetailDTO(BaseModel):
@@ -43,7 +54,9 @@ class DeliveryDetailDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
-    items: list[dict]
+    stock_deducted: bool = False
+    allowed_next: List[str] = []
+    items: List[DeliveryItemDTO]
 
 
 class DeliveryLogDTO(BaseModel):

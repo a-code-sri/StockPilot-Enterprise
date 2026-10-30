@@ -1,21 +1,21 @@
 from sqlalchemy.orm import Session
-from backend.modules.delivery.infrastructure.repository import SQLAlchemyDeliveryRepository
+
 from backend.modules.delivery.application.services import DeliveryService
+from backend.modules.delivery.infrastructure.repository import SQLAlchemyDeliveryRepository
 
 
 class DeliveryFacade:
     def __init__(self, db: Session):
-        repo = SQLAlchemyDeliveryRepository(db)
-        self.service = DeliveryService(repo)
+        self.service = DeliveryService(SQLAlchemyDeliveryRepository(db))
 
     def create(self, dto):
         return self.service.create_delivery(dto)
 
-    def list_active(self):
-        return self.service.list_active()
+    def list_active(self, *, limit: int, offset: int):
+        return self.service.list_active(limit=limit, offset=offset)
 
-    def list_finished(self):
-        return self.service.list_finished()
+    def list_finished(self, *, limit: int, offset: int):
+        return self.service.list_finished(limit=limit, offset=offset)
 
     def get(self, order_id: str):
         return self.service.get_delivery(order_id)

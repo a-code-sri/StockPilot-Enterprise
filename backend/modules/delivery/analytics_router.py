@@ -4,371 +4,116 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.core.database.adapter import DatabaseAdapter
+from backend.core.database.adapter import get_db
 from backend.core.rbac.dependencies import require_permission
-
+from backend.core.time import utctoday
 from backend.modules.delivery.infrastructure.projections import (
     DeliveryDailyCounts,
-    DeliveryDailyStatusCounts,
-    DeliveryDailyItemCounts,
     DeliveryDailyHourCounts,
+    DeliveryDailyItemCounts,
+    DeliveryDailyStatusCounts,
 )
-
 
 router = APIRouter()
 
 
-def _build_moving_average_series(
-    rows,
-    start: date,
-    end: date,
-    window: int,
-):
-    values = {
-        day: int(count or 0)
-        for day, count in rows
-    }
-
-    total_days = (
-        end - start
-    ).days + 1
-
-    series = []
-    counts = []
-
-    for i in range(total_days):
+def moving_average_series(counts_by_day: dict[date, int], start: date, end: date, window: int) -> list[dict]:
+    """Trailing moving average over every day in [start, end] (missing days count as 0)."""
+    series, counts = [], []
+    for i in range((end - start).days + 1):
         day = start + timedelta(days=i)
-
-        count = values.get(day, 0)
-
-        counts.append(count)
-
-        window_start = max(
-            0,
-            len(counts) - window,
-        )
-
-        window_values = counts[
-            window_start:
-        ]
-
-        moving_avg = (
-            sum(window_values)
-            / max(1, len(window_values))
-        )
-
-        series.append(
-            {
-                "day": day.isoformat(),
-                "count": count,
-                "moving_avg": moving_avg,
-            }
-        )
-
+        counts.append(int(counts_by_day.get(day, 0)))
+        recent = counts[-window:]
+        series.append({"day": day.isoformat(), "count": counts[-1], "moving_avg": sum(recent) / len(recent)})
     return series
 
 
-def _date_range(days: int):
-    today = date.today()
+def shift_hours(counts_by_utc_hour: dict[int, int], tz_offset_minutes: int) -> list[dict]:
+    """Re-label UTC hour buckets as (approximate) local hours, rounding the offset to whole hours."""
+    shift = round(tz_offset_minutes / 60)
+    local: dict[int, int] = {h: 0 for h in range(24)}
+    for utc_hour, count in counts_by_utc_hour.items():
+        local[(utc_hour + shift) % 24] += count
+    return [{"label": h, "value": local[h]} for h in range(24)]
 
-    start = today - timedelta(
-        days=days - 1
+
+def _sum_by(db: Session, key_col, value_col, day_col, start: date, end: date, order_by=None, limit=None):
+    q = (
+        db.query(key_col, func.sum(value_col))
+        .filter(day_col >= start, day_col <= end)
+        .group_by(key_col)
     )
+    if order_by is not None:
+        q = q.order_by(*order_by)
+    if limit:
+        q = q.limit(limit)
+    return q.all()
 
-    return start, today
 
+def build_period(db: Session, days: int, window: int, top_n: int, tz_offset_minutes: int) -> dict:
+    end = utctoday()
+    start = end - timedelta(days=days - 1)
 
-def _top_items(
-    db: Session,
-    start: date,
-    end: date,
-    top_n: int,
-):
-    rows = (
-        db.query(
-            DeliveryDailyItemCounts.product_name,
-            func.sum(
-                DeliveryDailyItemCounts.quantity
-            ).label("quantity"),
-        )
-        .filter(
-            DeliveryDailyItemCounts.day >= start,
-            DeliveryDailyItemCounts.day <= end,
-        )
-        .group_by(
-            DeliveryDailyItemCounts.product_name
-        )
-        .order_by(
-            func.sum(
-                DeliveryDailyItemCounts.quantity
-            ).desc(),
-            DeliveryDailyItemCounts.product_name.asc(),
-        )
-        .limit(top_n)
+    delivered = dict(
+        db.query(DeliveryDailyCounts.day, DeliveryDailyCounts.delivered_count)
+        .filter(DeliveryDailyCounts.day >= start, DeliveryDailyCounts.day <= end)
         .all()
     )
 
-    return [
-        {
-            "label": product_name,
-            "value": int(quantity or 0),
-        }
-        for product_name, quantity in rows
-    ]
-
-
-def _status_distribution(
-    db: Session,
-    start: date,
-    end: date,
-):
-    rows = (
-        db.query(
-            DeliveryDailyStatusCounts.status,
-            func.sum(
-                DeliveryDailyStatusCounts.count
-            ).label("count"),
-        )
-        .filter(
-            DeliveryDailyStatusCounts.day >= start,
-            DeliveryDailyStatusCounts.day <= end,
-        )
-        .group_by(
-            DeliveryDailyStatusCounts.status
-        )
-        .order_by(
-            func.sum(
-                DeliveryDailyStatusCounts.count
-            ).desc(),
-            DeliveryDailyStatusCounts.status.asc(),
-        )
-        .all()
+    qty = func.sum(DeliveryDailyItemCounts.quantity)
+    items = _sum_by(
+        db, DeliveryDailyItemCounts.product_name, DeliveryDailyItemCounts.quantity, DeliveryDailyItemCounts.day,
+        start, end, order_by=(qty.desc(), DeliveryDailyItemCounts.product_name.asc()), limit=top_n,
     )
-
-    return [
-        {
-            "label": status,
-            "value": int(count or 0),
-        }
-        for status, count in rows
-    ]
-
-
-def _peak_delivery_hours(
-    db: Session,
-    start: date,
-    end: date,
-):
-    rows = (
-        db.query(
-            DeliveryDailyHourCounts.hour,
-            func.sum(
-                DeliveryDailyHourCounts.count
-            ).label("count"),
-        )
-        .filter(
-            DeliveryDailyHourCounts.day >= start,
-            DeliveryDailyHourCounts.day <= end,
-        )
-        .group_by(
-            DeliveryDailyHourCounts.hour
-        )
-        .order_by(
-            DeliveryDailyHourCounts.hour.asc()
-        )
-        .all()
+    statuses = _sum_by(
+        db, DeliveryDailyStatusCounts.status, DeliveryDailyStatusCounts.count, DeliveryDailyStatusCounts.day,
+        start, end, order_by=(func.sum(DeliveryDailyStatusCounts.count).desc(),),
     )
-
-    counts = {
-        int(hour): int(count or 0)
-        for hour, count in rows
-    }
-
-    return [
-        {
-            "label": hour,
-            "value": counts.get(hour, 0),
-        }
-        for hour in range(24)
-    ]
-
-
-def _build_period(
-    db: Session,
-    days: int,
-    moving_average_window: int,
-    top_n: int,
-):
-    start, end = _date_range(days)
-
-    delivery_rows = (
-        db.query(
-            DeliveryDailyCounts.day,
-            DeliveryDailyCounts.delivered_count,
-        )
-        .filter(
-            DeliveryDailyCounts.day >= start,
-            DeliveryDailyCounts.day <= end,
-        )
-        .order_by(
-            DeliveryDailyCounts.day.asc()
-        )
-        .all()
+    hours = _sum_by(
+        db, DeliveryDailyHourCounts.hour, DeliveryDailyHourCounts.count, DeliveryDailyHourCounts.day, start, end
     )
 
     return {
-        "range": {
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        },
-        "moving_average": {
-            "window": moving_average_window,
-            "series": _build_moving_average_series(
-                delivery_rows,
-                start,
-                end,
-                moving_average_window,
-            ),
-        },
-        "most_ordered_items": {
-            "top_n": top_n,
-            "series": _top_items(
-                db,
-                start,
-                end,
-                top_n,
-            ),
-        },
+        "range": {"start": start.isoformat(), "end": end.isoformat()},
+        "moving_average": {"window": window, "series": moving_average_series(delivered, start, end, window)},
+        "most_ordered_items": {"top_n": top_n, "series": [{"label": n, "value": int(q or 0)} for n, q in items]},
         "status_distribution": {
-            "series": _status_distribution(
-                db,
-                start,
-                end,
-            ),
+            "series": [{"label": s, "value": int(c or 0)} for s, c in statuses if int(c or 0) > 0]
         },
         "peak_delivery_time_histogram": {
-            "series": _peak_delivery_hours(
-                db,
-                start,
-                end,
-            ),
+            "series": shift_hours({int(h): int(c or 0) for h, c in hours}, tz_offset_minutes),
+            "tz_offset_minutes": tz_offset_minutes,
         },
     }
 
 
 @router.get("/overview")
 def delivery_overview(
-    days_month: int = Query(
-        30,
-        ge=1,
-        le=3650,
-    ),
-    days_year: int = Query(
-        365,
-        ge=1,
-        le=3650,
-    ),
-    top_n: int = Query(
-        10,
-        ge=1,
-        le=100,
-    ),
-    ma_window_month: int = Query(
-        7,
-        ge=1,
-        le=365,
-    ),
-    ma_window_year: int = Query(
-        30,
-        ge=1,
-        le=365,
-    ),
-    db: Session = Depends(
-        DatabaseAdapter.get_db
-    ),
-    user=Depends(
-        require_permission("delivery.read")
-    ),
+    days_month: int = Query(30, ge=1, le=3650),
+    days_year: int = Query(365, ge=1, le=3650),
+    top_n: int = Query(10, ge=1, le=100),
+    ma_window_month: int = Query(7, ge=1, le=365),
+    ma_window_year: int = Query(30, ge=1, le=365),
+    tz_offset_minutes: int = Query(0, ge=-720, le=840, description="Viewer's UTC offset, e.g. 330 for IST"),
+    db: Session = Depends(get_db),
+    user=Depends(require_permission("delivery.read")),
 ):
-    month = _build_period(
-        db=db,
-        days=days_month,
-        moving_average_window=ma_window_month,
-        top_n=top_n,
-    )
+    month = build_period(db, days_month, ma_window_month, top_n, tz_offset_minutes)
+    year = build_period(db, days_year, ma_window_year, top_n, tz_offset_minutes)
 
-    year = _build_period(
-        db=db,
-        days=days_year,
-        moving_average_window=ma_window_year,
-        top_n=top_n,
-    )
-
-    latest_delivery_update = db.query(
-        func.max(
-            DeliveryDailyCounts.updated_at
-        )
-    ).scalar()
-
-    latest_status_update = db.query(
-        func.max(
-            DeliveryDailyStatusCounts.updated_at
-        )
-    ).scalar()
-
-    latest_item_update = db.query(
-        func.max(
-            DeliveryDailyItemCounts.updated_at
-        )
-    ).scalar()
-
-    latest_hour_update = db.query(
-        func.max(
-            DeliveryDailyHourCounts.updated_at
-        )
-    ).scalar()
-
-    timestamps = [
-        value
-        for value in (
-            latest_delivery_update,
-            latest_status_update,
-            latest_item_update,
-            latest_hour_update,
-        )
-        if value is not None
-    ]
-
-    last_updated = (
-        max(timestamps)
-        if timestamps
-        else None
+    last_updated = max(
+        (
+            ts
+            for ts in (
+                db.query(func.max(m.updated_at)).scalar()
+                for m in (DeliveryDailyCounts, DeliveryDailyStatusCounts, DeliveryDailyItemCounts, DeliveryDailyHourCounts)
+            )
+            if ts is not None
+        ),
+        default=None,
     )
 
     return {
-        "moving_average": {
-            "month": month["moving_average"],
-            "year": year["moving_average"],
-        },
-        "most_ordered_items": {
-            "month": month["most_ordered_items"],
-            "year": year["most_ordered_items"],
-        },
-        "status_distribution": {
-            "month": month["status_distribution"],
-            "year": year["status_distribution"],
-        },
-        "peak_delivery_time_histogram": {
-            "month": month[
-                "peak_delivery_time_histogram"
-            ],
-            "year": year[
-                "peak_delivery_time_histogram"
-            ],
-        },
-        "last_updated": (
-            last_updated.isoformat()
-            if last_updated
-            else None
-        ),
-    }
+        key: {"month": month[key], "year": year[key]}
+        for key in ("moving_average", "most_ordered_items", "status_distribution", "peak_delivery_time_histogram")
+    } | {"last_updated": last_updated.isoformat() if last_updated else None}

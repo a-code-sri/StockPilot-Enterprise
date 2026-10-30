@@ -1,12 +1,12 @@
 from sqlalchemy.orm import Session
-from backend.modules.projects.infrastructure.repository import SQLAlchemyProjectsRepository
+
 from backend.modules.projects.application.services import ProjectsService
+from backend.modules.projects.infrastructure.repository import SQLAlchemyProjectsRepository
 
 
 class ProjectsFacade:
     def __init__(self, db: Session):
-        repo = SQLAlchemyProjectsRepository(db)
-        self.service = ProjectsService(repo)
+        self.service = ProjectsService(SQLAlchemyProjectsRepository(db))
 
     def create_project(self, dto):
         return self.service.create_project(dto)

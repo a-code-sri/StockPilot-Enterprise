@@ -1,37 +1,35 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import List, Optional
 
 
 class OrganizationRepositoryInterface(ABC):
 
-    # Departments
     @abstractmethod
     def create_department(self, name: str):
         pass
 
     @abstractmethod
-    def list_departments(self):
+    def list_departments_with_headcount(self):
         pass
 
     @abstractmethod
     def get_department_by_name(self, name: str):
         pass
 
-    # Employees
     @abstractmethod
-    def create_employee(
-        self,
-        employee_id: str,
-        name: str,
-        salary: float,
-        job_role: str,
-        manager_id: Optional[int],
-        department_ids: List[int],
-    ):
+    def get_departments_by_names(self, names: List[str]):
         pass
 
     @abstractmethod
-    def delete_employee(self, employee_db_id: int):
+    def delete_department(self, department):
+        pass
+
+    @abstractmethod
+    def add_employee(self, **fields):
+        pass
+
+    @abstractmethod
+    def delete_employee(self, employee):
         pass
 
     @abstractmethod
@@ -39,14 +37,9 @@ class OrganizationRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def get_employee_by_db_id(self, employee_db_id: int):
+    def manager_id_of(self, employee_db_id: int) -> Optional[int]:
         pass
 
     @abstractmethod
-    def search_employees(
-        self,
-        q: Optional[str],
-        department: Optional[str],
-        manager_employee_id: Optional[str],
-    ):
+    def search_employees(self, *, q, department, manager_employee_id, limit: int, offset: int):
         pass

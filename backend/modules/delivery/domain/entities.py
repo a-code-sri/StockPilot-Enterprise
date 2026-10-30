@@ -1,7 +1,4 @@
-from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
-from typing import List, Optional
 
 
 class DeliveryStatus(str, Enum):
@@ -13,30 +10,36 @@ class DeliveryStatus(str, Enum):
     cancelled = "cancelled"
 
 
-ACTIVE_STATUSES = {
-    DeliveryStatus.pending,
-    DeliveryStatus.packed,
-    DeliveryStatus.out_for_delivery,
+ACTIVE_STATUSES = {DeliveryStatus.pending, DeliveryStatus.packed, DeliveryStatus.out_for_delivery}
+FINISHED_STATUSES = {DeliveryStatus.delivered, DeliveryStatus.failed, DeliveryStatus.cancelled}
+
+# Allowed status changes. delivered/cancelled are terminal; a failed delivery can
+# be re-opened (back to pending) for another attempt, or cancelled.
+TRANSITIONS: dict[DeliveryStatus, frozenset[DeliveryStatus]] = {
+    DeliveryStatus.pending: frozenset({DeliveryStatus.packed, DeliveryStatus.cancelled}),
+    DeliveryStatus.packed: frozenset({DeliveryStatus.pending, DeliveryStatus.out_for_delivery, DeliveryStatus.cancelled}),
+    DeliveryStatus.out_for_delivery: frozenset({DeliveryStatus.delivered, DeliveryStatus.failed}),
+    DeliveryStatus.failed: frozenset({DeliveryStatus.pending, DeliveryStatus.cancelled}),
+    DeliveryStatus.delivered: frozenset(),
+    DeliveryStatus.cancelled: frozenset(),
 }
 
-FINISHED_STATUSES = {
-    DeliveryStatus.delivered,
-    DeliveryStatus.failed,
-    DeliveryStatus.cancelled,
-}
+# Stock leaves the warehouse when the order is dispatched...
+DEDUCT_STOCK_ON = DeliveryStatus.out_for_delivery
+# ...and comes back if the delivery does not complete.
+RETURN_STOCK_ON = frozenset({DeliveryStatus.failed, DeliveryStatus.cancelled})
 
 
-@dataclass(frozen=True)
-class DeliveryItemEntity:
-    product_name: str
-    quantity: int
-    unit_price: float = 0.0
+class InvalidTransition(ValueError):
+    pass
 
 
-@dataclass(frozen=True)
-class DeliveryCreateEntity:
-    order_id: str
-    customer_id: str
-    items: List[DeliveryItemEntity]
-    created_at: datetime
-    remarks: Optional[str] = None
+def check_transition(current: str, new: str) -> None:
+    cur, nxt = DeliveryStatus(current), DeliveryStatus(new)
+    if nxt not in TRANSITIONS[cur]:
+        allowed = ", ".join(sorted(s.value for s in TRANSITIONS[cur])) or "none (final status)"
+        raise InvalidTransition(f"Cannot change status from '{cur.value}' to '{nxt.value}'. Allowed: {allowed}")
+
+
+def allowed_next(current: str) -> list[str]:
+    return sorted(s.value for s in TRANSITIONS[DeliveryStatus(current)])

@@ -1,176 +1,83 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from backend.core.time import utcnow
+from backend.modules.delivery.domain.interfaces import DeliveryRepositoryInterface
 from backend.modules.delivery.infrastructure.models import (
-    DeliveryModel,
     DeliveryItemModel,
     DeliveryLogModel,
+    DeliveryModel,
+    DeliveryStatusEnum,
 )
 
 
-class SQLAlchemyDeliveryRepository:
+class SQLAlchemyDeliveryRepository(DeliveryRepositoryInterface):
+    """Persistence only. Never commits: the service owns the transaction."""
+
     def __init__(self, db: Session):
         self.db = db
 
-    # ---- Delivery ----
-
-    def create_delivery(
-        self,
-        order_id: str,
-        customer_id: str,
-        status: str,
-        remarks: str | None,
-        *,
-        commit: bool = True,
-    ) -> DeliveryModel:
+    def create_delivery(self, order_id: str, customer_id: str, remarks: str | None) -> DeliveryModel:
+        now = utcnow()
         delivery = DeliveryModel(
             order_id=order_id,
             customer_id=customer_id,
-            status=status,
+            status=DeliveryStatusEnum.pending,
             remarks=remarks,
+            created_at=now,
+            updated_at=now,
         )
-
         self.db.add(delivery)
-
-        if commit:
-            self.db.commit()
-            self.db.refresh(delivery)
-
+        self.db.flush()
         return delivery
 
-    def get_by_order_id(self, order_id: str) -> Optional[DeliveryModel]:
-        stmt = (
-            select(DeliveryModel)
-            .where(DeliveryModel.order_id == order_id)
-            .options(selectinload(DeliveryModel.items))
-        )
-
+    def get_by_order_id(self, order_id: str, *, for_update: bool = False) -> Optional[DeliveryModel]:
+        stmt = select(DeliveryModel).where(DeliveryModel.order_id == order_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        else:
+            stmt = stmt.options(selectinload(DeliveryModel.items))
         return self.db.execute(stmt).scalars().first()
 
-    def list_deliveries(
-        self,
-        statuses: list[str],
-    ) -> list[DeliveryModel]:
-        stmt = (
-            select(DeliveryModel)
-            .where(DeliveryModel.status.in_(statuses))
-            .order_by(DeliveryModel.created_at.desc())
-            .options(selectinload(DeliveryModel.items))
-        )
-
-        return list(self.db.execute(stmt).scalars().all())
-
-    def update_status(
-        self,
-        delivery: DeliveryModel,
-        new_status: str,
-        *,
-        commit: bool = True,
-    ) -> DeliveryModel:
-        delivery.status = new_status
-        delivery.updated_at = datetime.utcnow()
-
-        self.db.add(delivery)
-
-        if commit:
-            self.db.commit()
-            self.db.refresh(delivery)
-
-        return delivery
-
-    def set_completed(
-        self,
-        delivery: DeliveryModel,
-        *,
-        commit: bool = True,
-    ) -> DeliveryModel:
-        delivery.completed_at = datetime.utcnow()
-        delivery.updated_at = datetime.utcnow()
-
-        self.db.add(delivery)
-
-        if commit:
-            self.db.commit()
-            self.db.refresh(delivery)
-
-        return delivery
-
-    # ---- Items ----
-
-    def add_items(
-        self,
-        delivery_db_id: int,
-        items: list[dict],
-        *,
-        commit: bool = True,
-    ) -> None:
-        rows = [
-            DeliveryItemModel(
-                delivery_id=delivery_db_id,
-                product_name=item["product_name"],
-                quantity=item["quantity"],
-                unit_price=item["unit_price"],
+    def list_deliveries(self, statuses: list[str], *, limit: int, offset: int):
+        base = select(DeliveryModel).where(DeliveryModel.status.in_(statuses))
+        total = self.db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
+        rows = (
+            self.db.execute(
+                base.order_by(DeliveryModel.created_at.desc())
+                .options(selectinload(DeliveryModel.items))
+                .limit(limit)
+                .offset(offset)
             )
-            for item in items
-        ]
-
-        self.db.add_all(rows)
-
-        if commit:
-            self.db.commit()
-
-    def get_items(
-        self,
-        delivery_db_id: int,
-    ) -> list[DeliveryItemModel]:
-        stmt = (
-            select(DeliveryItemModel)
-            .where(DeliveryItemModel.delivery_id == delivery_db_id)
+            .scalars()
+            .all()
         )
+        return list(rows), total
 
+    def add_items(self, delivery_db_id: int, items: list[dict]) -> None:
+        self.db.add_all(DeliveryItemModel(delivery_id=delivery_db_id, **item) for item in items)
+        self.db.flush()
+
+    def get_items(self, delivery_db_id: int) -> list[DeliveryItemModel]:
+        stmt = select(DeliveryItemModel).where(DeliveryItemModel.delivery_id == delivery_db_id).order_by(DeliveryItemModel.id)
         return list(self.db.execute(stmt).scalars().all())
 
-    # ---- Logs ----
-
-    def add_log(
-        self,
-        *,
-        delivery_db_id: int,
-        from_status: str | None,
-        to_status: str,
-        remark: str | None,
-        timestamp: datetime | None = None,
-        commit: bool = True,
-    ) -> DeliveryLogModel:
+    def add_log(self, *, delivery_db_id: int, from_status: str | None, to_status: str, remark: str | None) -> DeliveryLogModel:
         log = DeliveryLogModel(
-            delivery_id=delivery_db_id,
-            from_status=from_status,
-            to_status=to_status,
-            remark=remark,
-            timestamp=timestamp or datetime.utcnow(),
+            delivery_id=delivery_db_id, from_status=from_status, to_status=to_status, remark=remark, timestamp=utcnow()
         )
-
         self.db.add(log)
-
-        if commit:
-            self.db.commit()
-            self.db.refresh(log)
-
+        self.db.flush()
         return log
 
-    def get_logs(
-        self,
-        delivery_db_id: int,
-    ) -> list[DeliveryLogModel]:
+    def get_logs(self, delivery_db_id: int) -> list[DeliveryLogModel]:
         stmt = (
             select(DeliveryLogModel)
             .where(DeliveryLogModel.delivery_id == delivery_db_id)
-            .order_by(DeliveryLogModel.timestamp.desc())
+            .order_by(DeliveryLogModel.timestamp.desc(), DeliveryLogModel.id.desc())
         )
-
         return list(self.db.execute(stmt).scalars().all())

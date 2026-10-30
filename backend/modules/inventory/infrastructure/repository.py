@@ -7,11 +7,12 @@ from backend.modules.inventory.infrastructure.models import (
 
 
 class SQLAlchemyInventoryRepository(InventoryRepositoryInterface):
+    """Persistence only. Never commits: the service owns the transaction."""
 
     def __init__(self, db):
         self.db = db
 
-    def create_item(self, item):
+    def add_item(self, item) -> InventoryItemModel:
         model = InventoryItemModel(
             name=item.name,
             quantity=item.quantity,
@@ -21,52 +22,45 @@ class SQLAlchemyInventoryRepository(InventoryRepositoryInterface):
             expiry_date=item.expiry_date,
         )
         self.db.add(model)
-        self.db.commit()
-        self.db.refresh(model)
+        self.db.flush()
         return model
 
-    def get_item_by_name(self, name: str):
-        return self.db.query(InventoryItemModel).filter_by(name=name).first()
+    def _query(self, for_update: bool):
+        q = self.db.query(InventoryItemModel)
+        # Row lock prevents lost updates when two requests move the same stock.
+        return q.with_for_update() if for_update else q
 
-    def update_item(self, model, commit: bool = True):
-        """
-        If commit=False, caller is responsible for committing.
-        This is necessary to keep item update + log insert in the same transaction.
-        """
-        if commit:
-            self.db.commit()
-            self.db.refresh(model)
-        else:
-            self.db.flush()
-        return model
+    def get_item(self, item_id: int, *, for_update: bool = False):
+        return self._query(for_update).filter(InventoryItemModel.id == item_id).first()
 
-    def log_history(self, log_data, commit: bool = True):
-        """
-        If commit=False, caller is responsible for committing.
-        """
-        log = InventoryLogModel(**log_data)
+    def get_item_by_name(self, name: str, *, for_update: bool = False):
+        return self._query(for_update).filter(InventoryItemModel.name == name).first()
+
+    def add_log(self, item_id: int, action: str, quantity, detail=None) -> InventoryLogModel:
+        log = InventoryLogModel(item_id=item_id, action=action, quantity=quantity, detail=detail)
         self.db.add(log)
-        if commit:
-            self.db.commit()
-            self.db.refresh(log)
-        else:
-            self.db.flush()
+        self.db.flush()
         return log
 
-    def list_items(self, status: str = None):
+    def list_items(self, *, status=None, search=None, limit: int, offset: int):
         query = self.db.query(InventoryItemModel)
         if status:
             query = query.filter(InventoryItemModel.status == status)
-        return query.all()
+        if search:
+            query = query.filter(InventoryItemModel.name.ilike(f"%{search}%"))
+        total = query.count()
+        rows = query.order_by(InventoryItemModel.name.asc()).limit(limit).offset(offset).all()
+        return rows, total
 
-    def delete_item(self, model):
+    def delete_item(self, model) -> None:
         self.db.delete(model)
-        self.db.commit()
+        self.db.flush()
 
-    def get_logs(self, item_id: int):
+    def get_logs(self, item_id: int, *, limit: int):
         return (
             self.db.query(InventoryLogModel)
-            .filter_by(item_id=item_id)
-            .order_by(InventoryLogModel.timestamp.desc())
+            .filter(InventoryLogModel.item_id == item_id)
+            .order_by(InventoryLogModel.timestamp.desc(), InventoryLogModel.id.desc())
+            .limit(limit)
             .all()
         )
