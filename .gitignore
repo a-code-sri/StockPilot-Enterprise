@@ -1,13 +1,15 @@
-@'
+# Secrets
 .env
 .env.*
 !.env.example
 !.env.*.example
 
+# Node / Vite
 node_modules/
 dist/
 .vite/
 
+# Python
 .venv/
 venv/
 __pycache__/
@@ -16,6 +18,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Data / keys
 *.log
 logs/
 *.db
@@ -27,8 +30,8 @@ logs/
 *.p12
 *.pfx
 
+# Editors / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-'@ | Set-Content .gitignore

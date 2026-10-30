@@ -1,0 +1,9 @@
+.venv
+**/__pycache__
+**/*.pyc
+.git
+frontend
+client_app
+tests
+.env
+*.md
