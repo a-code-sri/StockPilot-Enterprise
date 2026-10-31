@@ -54,9 +54,15 @@ export function AuthProvider({ children }) {
 
   const can = useCallback((permission) => Boolean(user?.permissions?.includes(permission)), [user]);
 
+  // After a password change the server revokes old tokens and hands back a new one.
+  const replaceToken = useCallback((token) => {
+    localStorage.setItem(TOKEN_KEY, token);
+    realtimeSocket.reconnect();
+  }, []);
+
   const value = useMemo(
-    () => ({ user, restoring, login, logout, can, refreshUser }),
-    [user, restoring, login, logout, can, refreshUser]
+    () => ({ user, restoring, login, logout, can, refreshUser, replaceToken }),
+    [user, restoring, login, logout, can, refreshUser, replaceToken]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

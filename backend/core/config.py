@@ -51,6 +51,20 @@ class Settings(BaseSettings):
 
     SEED_RBAC: bool = True
 
+    # ---- Password reset ----
+    # Public URL of the web app; reset links point here.
+    APP_BASE_URL: str = "http://localhost:8080"
+    PASSWORD_RESET_TTL_MINUTES: int = 30
+
+    # Optional SMTP for "forgot password" emails. Without it, admins hand out
+    # reset links from the Users & Roles page instead.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_STARTTLS: bool = True
+
     # Comma separated list of allowed browser origins.
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -84,6 +98,10 @@ class Settings(BaseSettings):
         url = self.DIRECT_DATABASE_URL or self.DATABASE_URL
         # psycopg2.connect() does not understand the SQLAlchemy driver prefix.
         return url.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.SMTP_HOST and self.SMTP_FROM)
 
     @property
     def cors_origins(self) -> list[str]:

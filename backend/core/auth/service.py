@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.auth import models, schemas
-from backend.core.auth.jwt_handler import create_access_token
+from backend.core.auth.passwords import issue_token
 from backend.core.auth.security import hash_password, verify_password
 
 
@@ -47,4 +47,4 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
 
-        return {"access_token": create_access_token(data={"sub": user.username}), "token_type": "bearer"}
+        return {"access_token": issue_token(user), "token_type": "bearer"}

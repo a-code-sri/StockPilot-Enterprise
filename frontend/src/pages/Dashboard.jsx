@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
 
 import LineChart from "../components/charts/LineChart";
 import DonutChart from "../components/charts/DonutChart";
@@ -63,6 +64,7 @@ export default function Dashboard() {
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState(null);
 
   // ------------------------------------------------------------
   // Inventory snapshot
@@ -215,6 +217,7 @@ export default function Dashboard() {
     } catch (e) {
       setError(extractErrorDetail(e));
     } finally {
+      setRefreshedAt(new Date());
       setLoading(false);
     }
   };
@@ -227,6 +230,9 @@ export default function Dashboard() {
     fetchSnapshots();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live: refetch whenever the worker reports new analytics for any module shown here.
+  useAnalyticsRefresh(["inventory", "accounts", "organization", "delivery"], fetchSnapshots);
 
   // ------------------------------------------------------------
   // Derived inventory alert counts
@@ -275,8 +281,10 @@ export default function Dashboard() {
             </h1>
 
             <p className="text-gray-400">
-              Default analytics snapshot (Inventory, Accounts,
-              Organization, Delivery).
+              Inventory, accounts, organization and delivery at a glance.
+              {refreshedAt && (
+                <span className="text-gray-500"> Updates live · last refreshed {refreshedAt.toLocaleTimeString()}</span>
+              )}
             </p>
           </div>
 

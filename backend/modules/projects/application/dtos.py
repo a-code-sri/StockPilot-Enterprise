@@ -18,6 +18,16 @@ class ProjectCreateDTO(BaseModel):
         return self
 
 
+class ProjectUpdateDTO(BaseModel):
+    """Partial update: omitted fields are left unchanged."""
+
+    title: Optional[str] = Field(default=None, min_length=2, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    start_date: Optional[date] = None
+    deadline: Optional[date] = None
+    resource_employee_ids: Optional[List[str]] = None
+
+
 class ProjectListDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -48,13 +58,29 @@ class TaskCreateDTO(BaseModel):
 
     @model_validator(mode="after")
     def _pert(self):
-        estimates = (self.optimistic, self.most_likely, self.pessimistic)
-        present = [e is not None for e in estimates]
-        if any(present) and not all(present):
-            raise ValueError("PERT requires optimistic, most_likely and pessimistic together")
-        if all(present) and not (self.optimistic <= self.most_likely <= self.pessimistic):
-            raise ValueError("PERT estimates must satisfy optimistic <= most_likely <= pessimistic")
+        check_pert(self.optimistic, self.most_likely, self.pessimistic)
         return self
+
+
+def check_pert(optimistic, most_likely, pessimistic) -> None:
+    present = [e is not None for e in (optimistic, most_likely, pessimistic)]
+    if any(present) and not all(present):
+        raise ValueError("PERT requires optimistic, most_likely and pessimistic together")
+    if all(present) and not (optimistic <= most_likely <= pessimistic):
+        raise ValueError("PERT estimates must satisfy optimistic <= most_likely <= pessimistic")
+
+
+class TaskUpdateDTO(BaseModel):
+    """Partial update: omitted fields are left unchanged. Send all three PERT estimates as null to remove them."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    duration_days: Optional[float] = Field(default=None, gt=0, le=3650)
+    optimistic: Optional[float] = Field(default=None, gt=0)
+    most_likely: Optional[float] = Field(default=None, gt=0)
+    pessimistic: Optional[float] = Field(default=None, gt=0)
+    predecessor_task_ids: Optional[List[int]] = None
+    resource_employee_ids: Optional[List[str]] = None
 
 
 class TaskDTO(BaseModel):

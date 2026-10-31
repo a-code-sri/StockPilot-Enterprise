@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,3 +47,9 @@ class UserAdminResponse(BaseModel):
 class PermissionCatalogResponse(BaseModel):
     modules: Dict[str, List[str]]
     permissions: List[str]
+
+
+class ResetLinkResponse(BaseModel):
+    reset_url: str
+    expires_at: datetime
+    emailed: bool

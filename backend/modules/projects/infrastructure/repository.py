@@ -119,6 +119,51 @@ class SQLAlchemyProjectsRepository(ProjectsRepositoryInterface):
             .first()
         )
 
+    def set_task_links(self, task, predecessor_task_ids: List[int] | None, resource_employee_ids: List[str] | None) -> None:
+        """Replace a task's predecessors and/or resources (None = unchanged). Caller checks for cycles."""
+        if predecessor_task_ids is not None:
+            predecessor_task_ids = list(dict.fromkeys(predecessor_task_ids))
+            if task.id in predecessor_task_ids:
+                raise ProjectsValidationError("A task cannot depend on itself.")
+            if predecessor_task_ids:
+                found = {
+                    tid
+                    for (tid,) in self.db.query(ProjectTaskModel.id).filter(
+                        ProjectTaskModel.project_id == task.project_id, ProjectTaskModel.id.in_(predecessor_task_ids)
+                    )
+                }
+                missing = [p for p in predecessor_task_ids if p not in found]
+                if missing:
+                    raise ProjectsValidationError(f"Predecessor task(s) not found in this project: {missing}")
+            self.db.execute(task_predecessors.delete().where(task_predecessors.c.task_id == task.id))
+            if predecessor_task_ids:
+                self.db.execute(
+                    task_predecessors.insert(), [{"task_id": task.id, "predecessor_id": p} for p in predecessor_task_ids]
+                )
+
+        if resource_employee_ids is not None:
+            resource_employee_ids = list(dict.fromkeys(resource_employee_ids))
+            self._validate_employees_exist(resource_employee_ids)
+            self.db.execute(task_resources.delete().where(task_resources.c.task_id == task.id))
+            if resource_employee_ids:
+                self.db.execute(
+                    task_resources.insert(), [{"task_id": task.id, "employee_id": e} for e in resource_employee_ids]
+                )
+
+        # Link-table writes bypass ORM mapper events; emit so analytics snapshots rebuild.
+        emit_projects_changed(self.db.connection(), reason="task_links_set", project_id=task.project_id)
+        self.db.expire(task, ["predecessors", "resources"])
+
+    def predecessor_map(self, project_id: int) -> dict[int, list[int]]:
+        """{task_id: [predecessor ids]} for every task in the project."""
+        ids = [tid for (tid,) in self.db.query(ProjectTaskModel.id).filter(ProjectTaskModel.project_id == project_id)]
+        preds: dict[int, list[int]] = {tid: [] for tid in ids}
+        if ids:
+            rows = self.db.execute(task_predecessors.select().where(task_predecessors.c.task_id.in_(ids))).all()
+            for task_id, predecessor_id in rows:
+                preds[task_id].append(predecessor_id)
+        return preds
+
     def delete_task(self, task) -> None:
         self.db.delete(task)
         self.db.flush()

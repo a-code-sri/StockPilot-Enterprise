@@ -24,17 +24,19 @@ export function useRealtime() {
 }
 
 /**
- * Calls `onUpdate` when the worker reports that `module`'s analytics changed.
- * Bursts of events (e.g. a batch import) are debounced into one refresh.
+ * Calls `onUpdate` when the worker reports that the analytics of `modules`
+ * (a module name or an array of them) changed. Bursts of events (e.g. a batch
+ * import) are debounced into one refresh.
  */
-export function useAnalyticsRefresh(module, onUpdate, delayMs = 400) {
+export function useAnalyticsRefresh(modules, onUpdate, delayMs = 400) {
   const { lastEvent } = useRealtime();
   const callback = useRef(onUpdate);
   callback.current = onUpdate;
+  const key = [].concat(modules).join(",");
 
   useEffect(() => {
-    if (lastEvent?.type !== "analytics.updated" || lastEvent?.module !== module) return;
+    if (lastEvent?.type !== "analytics.updated" || !key.split(",").includes(lastEvent?.module)) return;
     const t = setTimeout(() => callback.current(), delayMs);
     return () => clearTimeout(t);
-  }, [lastEvent, module, delayMs]);
+  }, [lastEvent, key, delayMs]);
 }

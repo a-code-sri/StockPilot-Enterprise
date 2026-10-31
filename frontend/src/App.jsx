@@ -5,6 +5,9 @@ import ProtectedRoute from "./components/ProtectedRoute";
 
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import ForgotPassword from "./pages/ForgotPassword.jsx";
+import ResetPassword from "./pages/ResetPassword.jsx";
+import Account from "./pages/Account.jsx";
 import Dashboard from "./pages/Dashboard";
 import Roles from "./pages/Roles";
 import Inventory from "./pages/Inventory";
@@ -25,6 +28,7 @@ import ProjectsAnalytics from "./pages/ProjectsAnalytics.jsx";
 // path, page, required permission (null = any signed-in user)
 const protectedRoutes = [
   ["/dashboard", Dashboard, null],
+  ["/account", Account, null],
   ["/assistant", Assistant, "ai.use"],
   ["/business", Business, null],
   ["/roles", Roles, "rbac.manage"],
@@ -50,6 +54,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             {protectedRoutes.map(([path, Page, permission]) => (
               <Route
                 key={path}
