@@ -1,193 +1,115 @@
+"""
+Outbox handler for the organization snapshot.
+
+Any org change triggers a full rebuild of one snapshot row (cheap: a handful of
+aggregate queries). The snapshot also keeps the sorted salary list privately so
+the API can build a histogram for any bin count without another scan.
+"""
+
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from backend.modules.organization.infrastructure.models import (
-    EmployeeModel,
-    DepartmentModel,
-    employee_departments,
-)
+from backend.core.analytics.stats import histogram
+from backend.core.time import utcnow
+from backend.modules.organization.infrastructure.models import DepartmentModel, EmployeeModel, employee_departments
 from backend.modules.organization.infrastructure.projections import OrganizationOverviewSnapshot
 
 logger = logging.getLogger(__name__)
 
-
+SNAPSHOT_KEY = 0  # single row
 DEFAULT_BINS = 10
 
 
-def _to_float(x) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return 0.0
-
-
-def _compute_histogram(salaries: list[float], bins: int) -> list[dict[str, float]]:
-    if bins <= 0:
-        bins = DEFAULT_BINS
-
-    if not salaries:
-        return []
-
-    mn = min(salaries)
-    mx = max(salaries)
-
-    # All same salary -> one bucket
-    if mx <= mn:
-        return [{"bin_start": mn, "bin_end": mx, "count": float(len(salaries))}]
-
-    width = (mx - mn) / bins
-    # avoid zero width due to float rounding
-    if width <= 0:
-        width = 1.0
-
-    counts = [0] * bins
-    for s in salaries:
-        idx = int((s - mn) / width)
-        if idx >= bins:
-            idx = bins - 1
-        if idx < 0:
-            idx = 0
-        counts[idx] += 1
-
-    out = []
-    for i, c in enumerate(counts):
-        b0 = mn + i * width
-        b1 = mn + (i + 1) * width
-        out.append({"bin_start": b0, "bin_end": b1, "count": float(c)})
-    return out
-
-
-def _build_overview_snapshot(db: Session, histogram_bins: int) -> dict[str, Any]:
-    # ---- Salary stats ----
-    # count, min, max, avg
-    total_employees, min_sal, max_sal, avg_sal = db.query(
-        func.count(EmployeeModel.id),
-        func.coalesce(func.min(EmployeeModel.salary), 0),
-        func.coalesce(func.max(EmployeeModel.salary), 0),
-        func.coalesce(func.avg(EmployeeModel.salary), 0),
-    ).one()
-
-    # median (Postgres)
-    median_sal = None
-    try:
-        median_sal = db.query(
-            func.percentile_cont(0.5).within_group(EmployeeModel.salary)
-        ).scalar()
-    except Exception:
-        median_sal = None
-
-    # ---- Top executive (highest salary) ----
-    top_emp = (
-        db.query(EmployeeModel)
-        .order_by(EmployeeModel.salary.desc(), EmployeeModel.id.asc())
+def _top_executive(db: Session) -> dict | None:
+    """
+    Head of the organisation: among employees with no manager, the one with the
+    most direct reports (ties broken by salary, then seniority).
+    """
+    reports = aliased(EmployeeModel)
+    sub_count = (
+        select(func.count(reports.id)).where(reports.manager_id == EmployeeModel.id).correlate(EmployeeModel).scalar_subquery()
+    )
+    row = (
+        db.query(EmployeeModel, sub_count.label("subs"))
+        .filter(EmployeeModel.manager_id.is_(None))
+        .order_by(sub_count.desc(), EmployeeModel.salary.desc(), EmployeeModel.created_at.asc())
         .first()
     )
-    top_exec = None
-    if top_emp:
-        subordinate_count = (
-            db.query(func.count(EmployeeModel.id))
-            .filter(EmployeeModel.manager_id == top_emp.id)
-            .scalar()
-            or 0
-        )
-        top_exec = {
-            "employee_id": top_emp.employee_id,
-            "name": top_emp.name,
-            "job_role": top_emp.job_role,
-            "salary": _to_float(top_emp.salary),
-            "subordinates": int(subordinate_count),
-        }
+    if not row:
+        return None
+    emp, subs = row
+    return {
+        "employee_id": emp.employee_id,
+        "name": emp.name,
+        "job_role": emp.job_role,
+        "salary": float(emp.salary),
+        "subordinates": int(subs or 0),
+        "departments": sorted(d.name for d in emp.departments),
+    }
 
-    # ---- Department share (headcount per department) ----
-    # count of employees in each department (based on association table)
+
+def build_overview_snapshot(db: Session) -> dict[str, Any]:
+    count, mn, mx, avg = db.query(
+        func.count(EmployeeModel.id), func.min(EmployeeModel.salary), func.max(EmployeeModel.salary),
+        func.avg(EmployeeModel.salary),
+    ).one()
+    median = db.query(func.percentile_cont(0.5).within_group(EmployeeModel.salary)).scalar()
+
     dept_counts = (
-        db.query(
-            DepartmentModel.name,
-            func.count(employee_departments.c.employee_db_id).label("headcount"),
-        )
-        .select_from(DepartmentModel)
-        .join(employee_departments, employee_departments.c.department_id == DepartmentModel.id, isouter=True)
+        db.query(DepartmentModel.name, func.count(employee_departments.c.employee_db_id))
+        .outerjoin(employee_departments, employee_departments.c.department_id == DepartmentModel.id)
         .group_by(DepartmentModel.name)
         .order_by(func.count(employee_departments.c.employee_db_id).desc(), DepartmentModel.name.asc())
         .all()
     )
-
-    # employees with no department -> "Unassigned"
-    # count employees not in association table
-    unassigned_count = (
+    unassigned = (
         db.query(func.count(EmployeeModel.id))
-        .filter(
-            ~EmployeeModel.id.in_(
-                select(employee_departments.c.employee_db_id)
-            )
-        )
+        .filter(~EmployeeModel.id.in_(select(employee_departments.c.employee_db_id)))
         .scalar()
-        or 0
     )
 
-    dept_share = []
-    denom = int(total_employees or 0) if int(total_employees or 0) > 0 else 1
+    # An employee can belong to several departments, so shares are of total memberships.
+    memberships = sum(int(c) for _, c in dept_counts) + int(unassigned or 0)
+    denom = memberships or 1
+    share = [{"label": n, "value": int(c), "pct": int(c) / denom * 100.0} for n, c in dept_counts if c]
+    if unassigned:
+        share.append({"label": "Unassigned", "value": int(unassigned), "pct": int(unassigned) / denom * 100.0})
 
-    for name, headcount in dept_counts:
-        hc = int(headcount or 0)
-        if hc == 0:
-            continue
-        dept_share.append({"label": name, "value": hc, "pct": (hc / denom) * 100.0})
-
-    if unassigned_count:
-        dept_share.append({"label": "Unassigned", "value": int(unassigned_count), "pct": (int(unassigned_count) / denom) * 100.0})
-
-    # ---- Histogram ----
-    salaries = [float(x[0]) for x in db.query(EmployeeModel.salary).all()]
-    histogram = _compute_histogram(salaries, histogram_bins)
+    salaries = sorted(float(s) for (s,) in db.query(EmployeeModel.salary).all())
 
     return {
-        "department_share": dept_share,
+        "department_share": share,
         "salary_stats": {
-            "count": int(total_employees or 0),
-            "min": _to_float(min_sal),
-            "max": _to_float(max_sal),
-            "avg": _to_float(avg_sal),
-            "median": _to_float(median_sal) if median_sal is not None else None,
+            "count": int(count or 0),
+            "min": float(mn or 0),
+            "max": float(mx or 0),
+            "avg": float(avg or 0),
+            "median": float(median) if median is not None else None,
         },
-        "salary_histogram": {
-            "bins": int(histogram_bins),
-            "series": histogram,
-        },
-        "top_executive": top_exec,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "top_executive": _top_executive(db),
+        "generated_at": utcnow().isoformat(),
+        "_salaries": salaries,
     }
 
 
+def render_overview(snapshot: dict[str, Any], bins: int) -> dict[str, Any]:
+    """Public API shape: drops private fields and adds a histogram for `bins`."""
+    data = {k: v for k, v in snapshot.items() if not k.startswith("_")}
+    data["salary_histogram"] = {"bins": bins, "series": histogram(snapshot.get("_salaries") or [], bins)}
+    return data
+
+
 def handle_org_changed(db: Session, payload: dict[str, Any], outbox_id: int) -> None:
-    bins = payload.get("histogram_bins")
-    try:
-        bins = int(bins) if bins is not None else DEFAULT_BINS
-    except Exception:
-        bins = DEFAULT_BINS
-
-    logger.info("organization analytics: org_changed outbox_id=%s bins=%s", outbox_id, bins)
-
-    snapshot = _build_overview_snapshot(db, bins)
-
-    stmt = pg_insert(OrganizationOverviewSnapshot).values(
-        histogram_bins=bins,
-        snapshot=snapshot,
-    )
-
+    logger.info("organization: org_changed outbox_id=%s", outbox_id)
+    stmt = pg_insert(OrganizationOverviewSnapshot).values(histogram_bins=SNAPSHOT_KEY, snapshot=build_overview_snapshot(db))
     stmt = stmt.on_conflict_do_update(
         index_elements=[OrganizationOverviewSnapshot.histogram_bins],
-        set_={
-            "snapshot": stmt.excluded.snapshot,
-            "updated_at": func.now(),
-        },
+        set_={"snapshot": stmt.excluded.snapshot, "updated_at": func.now()},
     )
-
     db.execute(stmt)
 
 

@@ -1,7 +1,4 @@
-from backend.modules.accounts.domain.entities import (
-    Transaction,
-    TransactionType
-)
+from backend.modules.accounts.domain.entities import Transaction, TransactionType
 
 
 class AccountsService:
@@ -15,15 +12,17 @@ class AccountsService:
             transaction_type=TransactionType(dto.transaction_type),
             source_target=dto.source_target,
             category=dto.category,
-            remarks=dto.remarks
+            remarks=dto.remarks,
         )
         return self.repository.create_transaction(transaction)
 
-    def delete_transaction(self, transaction_id: int):
-        self.repository.delete_transaction(transaction_id)
+    def delete_transaction(self, transaction_id: int) -> bool:
+        return self.repository.delete_transaction(transaction_id)
 
-    def list_transactions(self):
-        return self.repository.list_transactions()
+    def list_transactions(self, *, limit: int, offset: int, transaction_type=None, category=None):
+        return self.repository.list_transactions(
+            limit=limit, offset=offset, transaction_type=transaction_type, category=category
+        )
 
     def get_summary(self):
         return self.repository.get_overall_summary()

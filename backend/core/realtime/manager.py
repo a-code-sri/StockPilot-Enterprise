@@ -6,70 +6,55 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from backend.core.rbac.permissions import MODULE_READ_PERMISSION
+
 logger = logging.getLogger("realtime")
 
 
 class ConnectionManager:
     """
-    Maintains active WebSocket connections and broadcasts realtime events.
+    Tracks authenticated WebSocket connections and broadcasts realtime events.
 
-    This class deliberately contains no business or analytics logic.
-    It only manages connected clients and sends messages to them.
+    Each connection remembers the user's permissions at connect time; an event
+    tagged with a module is only delivered to users who can read that module.
     """
 
     def __init__(self) -> None:
-        self._connections: set[WebSocket] = set()
+        self._connections: dict[WebSocket, frozenset[str]] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket) -> None:
-        await websocket.accept()
-
+    async def register(self, websocket: WebSocket, permissions: set[str]) -> None:
         async with self._lock:
-            self._connections.add(websocket)
-
-        logger.info(
-            "WebSocket connected. Active connections: %s",
-            len(self._connections),
-        )
+            self._connections[websocket] = frozenset(permissions)
+        logger.info("WebSocket connected. Active connections: %s", len(self._connections))
 
     async def disconnect(self, websocket: WebSocket) -> None:
         async with self._lock:
-            self._connections.discard(websocket)
+            self._connections.pop(websocket, None)
+        logger.info("WebSocket disconnected. Active connections: %s", len(self._connections))
 
-        logger.info(
-            "WebSocket disconnected. Active connections: %s",
-            len(self._connections),
-        )
+    @staticmethod
+    def _can_receive(permissions: frozenset[str], message: dict[str, Any]) -> bool:
+        required = MODULE_READ_PERMISSION.get(str(message.get("module") or ""))
+        return required is None or required in permissions
 
     async def broadcast(self, message: dict[str, Any]) -> None:
-        """
-        Broadcast a JSON message to all currently connected clients.
-
-        Dead connections are removed automatically.
-        """
         async with self._lock:
-            connections = list(self._connections)
+            targets = [ws for ws, perms in self._connections.items() if self._can_receive(perms, message)]
 
-        if not connections:
-            return
-
-        dead_connections: list[WebSocket] = []
-
-        for websocket in connections:
+        dead: list[WebSocket] = []
+        for websocket in targets:
             try:
                 await websocket.send_json(message)
             except Exception:
-                dead_connections.append(websocket)
+                dead.append(websocket)
 
-        if dead_connections:
+        if dead:
             async with self._lock:
-                for websocket in dead_connections:
-                    self._connections.discard(websocket)
+                for websocket in dead:
+                    self._connections.pop(websocket, None)
 
-        logger.debug(
-            "Broadcast realtime event to %s client(s)",
-            len(connections) - len(dead_connections),
-        )
+        logger.debug("Broadcast realtime event to %s client(s)", len(targets) - len(dead))
 
     @property
     def connection_count(self) -> int:

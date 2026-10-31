@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import api from "../api";
-import { MOCK_MODE } from "../config";
 import PieChart from "../components/charts/PieChart";
 import HistogramChart from "../components/charts/HistogramChart";
-import { useRealtime } from "../realtime/RealtimeProvider";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
+import { InsightsPanel } from "../components/ui";
 function Panel({ title, subtitle, right, children }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -32,7 +32,6 @@ export default function OrganizationAnalytics() {
   const [error, setError] = useState("");
   const [bins, setBins] = useState(10);
   const [data, setData] = useState(null);
-  const { lastEvent } = useRealtime();
 
   const extractErrorDetail = (e) =>
     e?.response?.data?.detail || e?.message || "Failed to fetch organization analytics.";
@@ -40,33 +39,6 @@ export default function OrganizationAnalytics() {
   const fetchOverview = async () => {
     setError("");
 
-    if (MOCK_MODE) {
-      setData({
-        total_employees: 18,
-        department_share: [
-          { department: "Operations", headcount: 8, percent: 44.44 },
-          { department: "Warehouse", headcount: 5, percent: 27.78 },
-          { department: "Finance", headcount: 3, percent: 16.67 },
-          { department: "HR", headcount: 2, percent: 11.11 },
-        ],
-        salary_histogram: {
-          bins: [30000, 40000, 50000, 60000, 70000, 80000, 90000],
-          counts: [2, 5, 4, 3, 2, 2],
-          min: 32000,
-          max: 92000,
-          avg: 58500,
-          median: 56000,
-        },
-        top_executive: {
-          employee_id: "E100",
-          name: "Aarav Mehta",
-          salary: 92000,
-          job_role: "Plant Manager",
-          departments: ["Operations"],
-        },
-      });
-      return;
-    }
 
     try {
       const res = await api.get("/analytics/organization/overview", {
@@ -81,16 +53,8 @@ export default function OrganizationAnalytics() {
   useEffect(() => {
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    if (
-      lastEvent?.type === "analytics.updated" &&
-      lastEvent?.module === "organization"
-    ) {
-      fetchOverview();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent]);
+  }, [bins]);
+  useAnalyticsRefresh("organization", fetchOverview);
  const pieData = useMemo(() => {
   const rows = data?.department_share || [];
 
@@ -142,6 +106,8 @@ const histogramData = useMemo(() => {
             </button>
           </div>
         </div>
+
+        <div className="mt-8"><InsightsPanel module="organization" /></div>
 
         {error && (
           <div className="mt-6 bg-red-950/40 border border-red-900 text-red-200 px-4 py-3 rounded-xl">

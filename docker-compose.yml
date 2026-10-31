@@ -1,0 +1,118 @@
+# StockPilot Enterprise — full stack.
+#
+#   cp .env.example .env        # then edit secrets
+#   docker compose up -d --build                     # app at http://localhost:8080
+#   docker compose --profile ai up -d --build        # + local AI (Ollama)
+#   docker compose --profile simulator up -d         # + Streamlit simulator on :8501
+#
+# Services: db (PostgreSQL) -> api (FastAPI, runs migrations) -> worker (analytics
+# outbox) ; web (nginx: React app + /api proxy) ; optional ollama / simulator.
+
+name: stockpilot
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-stockpilot}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-stockpilot}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (at least 32 characters)}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+  ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+  AI_ENABLED: ${AI_ENABLED:-true}
+  OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+  OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-180}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpilot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+    # Lets OLLAMA_URL=http://host.docker.internal:11434 reach an Ollama on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"   # direct API / Swagger at /docs (localhost only)
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "backend.workers.analytics_worker"]
+    environment: *backend-env
+    depends_on:
+      api:
+        condition: service_healthy   # api applies migrations first
+    healthcheck:
+      disable: true
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+  # ---------------- optional: local AI ----------------
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # GPU (NVIDIA): uncomment
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    depends_on: [ollama]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}"]
+    restart: "no"
+
+  # ---------------- optional: Streamlit simulator ----------------
+  simulator:
+    build: ./client_app
+    profiles: ["simulator"]
+    environment:
+      STOCKPILOT_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${SIMULATOR_PORT:-8501}:8501"
+
+volumes:
+  pgdata:
+  ollama:

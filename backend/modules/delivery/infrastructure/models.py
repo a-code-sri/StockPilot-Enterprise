@@ -1,15 +1,26 @@
 import enum
-from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, DateTime, Enum, ForeignKey, Float,
-    CheckConstraint, UniqueConstraint, Index, event
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    event,
+    text,
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import insert, select
+from sqlalchemy.sql import select
 
 from backend.core.database.base import Base
-from backend.outbox.models import AnalyticsOutbox
+from backend.core.time import ensure_utc, utcnow
+from backend.outbox.repository import emit_event
 
 
 class DeliveryStatusEnum(str, enum.Enum):
@@ -29,12 +40,14 @@ class DeliveryModel(Base):
     customer_id = Column(String, nullable=False, index=True)
 
     status = Column(Enum(DeliveryStatusEnum), nullable=False, default=DeliveryStatusEnum.pending)
-
     remarks = Column(String, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    # True while linked inventory has been deducted for this delivery.
+    stock_deducted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     items = relationship("DeliveryItemModel", back_populates="delivery", cascade="all, delete-orphan")
     logs = relationship("DeliveryLogModel", back_populates="delivery", cascade="all, delete-orphan")
@@ -52,10 +65,12 @@ class DeliveryItemModel(Base):
 
     id = Column(Integer, primary_key=True)
     delivery_id = Column(Integer, ForeignKey("deliveries.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Optional link to stock; when set, dispatching the delivery deducts inventory.
+    inventory_item_id = Column(Integer, ForeignKey("inventory_items.id", ondelete="SET NULL"), nullable=True, index=True)
 
     product_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float, nullable=False, default=0.0)
+    unit_price = Column(Numeric(14, 2), nullable=False, default=0)
 
     delivery = relationship("DeliveryModel", back_populates="items")
 
@@ -76,88 +91,50 @@ class DeliveryLogModel(Base):
     to_status = Column(String, nullable=False)
     remark = Column(String, nullable=True)
 
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     delivery = relationship("DeliveryModel", back_populates="logs")
 
 
 @event.listens_for(DeliveryLogModel, "after_insert")
-def outbox_after_delivery_log_insert(
-    mapper,
-    connection,
-    target: DeliveryLogModel,
-):
+def outbox_after_delivery_log_insert(mapper, connection, target: DeliveryLogModel):
+    """Every status change (including creation, from_status=None) becomes one analytics event."""
     to_status = (target.to_status or "").strip().lower()
-
     if not to_status:
         return
 
-    delivery_row = connection.execute(
-        select(
-            DeliveryModel.order_id,
-            DeliveryModel.customer_id,
-            DeliveryModel.completed_at,
-        ).where(
-            DeliveryModel.id == target.delivery_id
-        )
+    delivery = connection.execute(
+        select(DeliveryModel.order_id, DeliveryModel.created_at).where(DeliveryModel.id == target.delivery_id)
     ).first()
-
-    if not delivery_row:
+    if not delivery:
         return
 
-    order_id = delivery_row.order_id
-    customer_id = delivery_row.customer_id
-    completed_at = delivery_row.completed_at
+    items = []
+    if target.from_status is None:
+        # Item quantities only matter for the creation event (counted once per order).
+        items = [
+            {"product_name": r.product_name, "quantity": int(r.quantity), "unit_price": str(r.unit_price)}
+            for r in connection.execute(
+                select(DeliveryItemModel.product_name, DeliveryItemModel.quantity, DeliveryItemModel.unit_price).where(
+                    DeliveryItemModel.delivery_id == target.delivery_id
+                )
+            )
+        ]
 
-    delivery_items = connection.execute(
-        select(
-            DeliveryItemModel.product_name,
-            DeliveryItemModel.quantity,
-            DeliveryItemModel.unit_price,
-        ).where(
-            DeliveryItemModel.delivery_id == target.delivery_id
-        )
-    ).all()
-
-    items = [
-        {
-            "product_name": item.product_name,
-            "quantity": int(item.quantity),
-            "unit_price": float(item.unit_price),
-        }
-        for item in delivery_items
-    ]
-
-    event_timestamp = target.timestamp or datetime.utcnow()
-
-    payload = {
-        "delivery_log_id": target.id,
-        "delivery_id": target.delivery_id,
-        "order_id": order_id,
-        "customer_id": customer_id,
-        "from_status": target.from_status,
-        "to_status": to_status,
-        "timestamp": event_timestamp.replace(
-            tzinfo=timezone.utc
-        ).isoformat(),
-        "completed_at": (
-            completed_at.replace(
-                tzinfo=timezone.utc
-            ).isoformat()
-            if completed_at
-            else None
-        ),
-        "items": items,
-    }
-
-    connection.execute(
-        insert(AnalyticsOutbox).values(
-            module="delivery",
-            event_type="delivery_changed",
-            aggregate_type="delivery",
-            aggregate_id=str(target.delivery_id),
-            payload=payload,
-            status="pending",
-            available_at=datetime.now(timezone.utc),
-        )
+    emit_event(
+        connection,
+        module="delivery",
+        event_type="delivery_changed",
+        aggregate_type="delivery",
+        aggregate_id=str(target.delivery_id),
+        payload={
+            "delivery_log_id": target.id,
+            "delivery_id": target.delivery_id,
+            "order_id": delivery.order_id,
+            "from_status": (target.from_status or None),
+            "to_status": to_status,
+            "timestamp": ensure_utc(target.timestamp or utcnow()).isoformat(),
+            "created_at": ensure_utc(delivery.created_at).isoformat(),
+            "items": items,
+        },
     )

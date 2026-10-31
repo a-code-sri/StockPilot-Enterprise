@@ -2,17 +2,25 @@
 fastapi>=0.110.0,<1.0.0
 uvicorn[standard]>=0.27.0,<1.0.0
 
+# ---- Settings / validation ----
+pydantic>=2.6,<3
+pydantic-settings>=2.2,<3
+email-validator>=2.1,<3
+
 # ---- Database / ORM / migrations ----
 SQLAlchemy>=2.0.0,<3.0.0
 alembic>=1.13.0,<2.0.0
 psycopg2-binary>=2.9.9,<3.0.0
 
 # ---- Auth / Security ----
-python-jose[cryptography]>=3.3.0,<4.0.0
-passlib[bcrypt]>=1.7.4,<2.0.0
+# passlib is unmaintained and breaks with bcrypt>=5, so bcrypt is used directly.
+bcrypt>=4.1,<6
+PyJWT>=2.8,<3
 
-# Needed by FastAPI OAuth2PasswordRequestForm (/auth/login) parsing
+# Needed by OAuth2PasswordRequestForm (/auth/token, used by Swagger "Authorize")
 python-multipart>=0.0.9,<1.0.0
 
-# ---- Optional but commonly needed ----
+# ---- HTTP client (Ollama AI integration) ----
+httpx>=0.27,<1
+
 python-dotenv>=1.0.0,<2.0.0

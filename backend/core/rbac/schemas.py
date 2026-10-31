@@ -1,17 +1,17 @@
-from pydantic import BaseModel
-from typing import List , Dict
+from typing import Dict, List
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PermissionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     name: str
-
-    class Config:
-        from_attributes = True
-
 
 
 class RoleCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=2, max_length=60)
+    # {"inventory": ["read", "write"], ...}
     access: Dict[str, List[str]]
 
 
@@ -20,9 +20,29 @@ class RoleUpdate(BaseModel):
 
 
 class RoleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     permissions: List[PermissionResponse]
 
-    class Config:
-        from_attributes = True
+
+class UserRolesUpdate(BaseModel):
+    roles: List[str]
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+
+
+class UserAdminResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    is_active: bool
+    roles: List[str]
+
+
+class PermissionCatalogResponse(BaseModel):
+    modules: Dict[str, List[str]]
+    permissions: List[str]

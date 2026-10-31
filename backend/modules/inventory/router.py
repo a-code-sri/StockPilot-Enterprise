@@ -1,85 +1,91 @@
-from fastapi import APIRouter, Depends, HTTPException
+from contextlib import contextmanager
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from backend.core.database.adapter import DatabaseAdapter
+from backend.core.database.adapter import get_db
+from backend.core.pagination import Page, page_params, set_total
 from backend.core.rbac.dependencies import require_permission
-
 from backend.modules.inventory.application.dtos import (
     InventoryCreateDTO,
-    InventoryUpdateDTO,
-    InventoryStatusUpdateDTO,
-    InventoryResponseDTO,
     InventoryLogDTO,
+    InventoryResponseDTO,
+    InventoryStatusUpdateDTO,
+    InventoryUpdateDTO,
 )
+from backend.modules.inventory.application.services import InventoryConflict, InventoryError, InventoryNotFound
 from backend.modules.inventory.facade import InventoryFacade
 
 router = APIRouter()
 
+can_read = require_permission("inventory.read")
+can_write = require_permission("inventory.write")
 
-@router.post("/", response_model=InventoryResponseDTO)
-def create_inventory(
-    dto: InventoryCreateDTO,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.write"))
-):
-    facade = InventoryFacade(db)
-    return facade.create_inventory(dto)
+
+@contextmanager
+def _http_errors():
+    try:
+        yield
+    except InventoryNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InventoryConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except InventoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/", response_model=InventoryResponseDTO, status_code=201)
+def create_inventory(dto: InventoryCreateDTO, db: Session = Depends(get_db), user=Depends(can_write)):
+    with _http_errors():
+        return InventoryFacade(db).create_inventory(dto)
 
 
 @router.get("/", response_model=list[InventoryResponseDTO])
 def list_inventory(
-    status: str = None,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.read"))
+    response: Response,
+    status: Optional[Literal["under_use", "ordered", "consumed"]] = None,
+    search: Optional[str] = None,
+    page: Page = Depends(page_params),
+    db: Session = Depends(get_db),
+    user=Depends(can_read),
 ):
-    facade = InventoryFacade(db)
-    return facade.list_inventory(status)
+    rows, total = InventoryFacade(db).list_inventory(
+        status=status, search=search, limit=page.limit, offset=page.offset
+    )
+    set_total(response, total)
+    return rows
 
 
-@router.put("/{name}", response_model=InventoryResponseDTO)
-def update_inventory(
-    name: str,
-    dto: InventoryUpdateDTO,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.write"))
-):
-    facade = InventoryFacade(db)
-    try:
-        return facade.update_inventory(name, dto)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+@router.get("/{item_id}", response_model=InventoryResponseDTO)
+def get_inventory(item_id: int, db: Session = Depends(get_db), user=Depends(can_read)):
+    with _http_errors():
+        return InventoryFacade(db).get_item(item_id)
 
 
-@router.put("/{name}/status", response_model=InventoryResponseDTO)
+@router.put("/{item_id}", response_model=InventoryResponseDTO)
+def move_stock(item_id: int, dto: InventoryUpdateDTO, db: Session = Depends(get_db), user=Depends(can_write)):
+    """Record a stock movement: add, consume, deliver, order or return."""
+    with _http_errors():
+        return InventoryFacade(db).update_inventory(item_id, dto)
+
+
+@router.put("/{item_id}/status", response_model=InventoryResponseDTO)
 def update_inventory_status(
-    name: str,
-    dto: InventoryStatusUpdateDTO,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.write"))
+    item_id: int, dto: InventoryStatusUpdateDTO, db: Session = Depends(get_db), user=Depends(can_write)
 ):
-    facade = InventoryFacade(db)
-    try:
-        return facade.update_status(name, dto.status)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    with _http_errors():
+        return InventoryFacade(db).update_status(item_id, dto.status)
 
 
-@router.delete("/{name}")
-def delete_inventory(
-    name: str,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.write"))
-):
-    facade = InventoryFacade(db)
-    facade.delete_inventory(name)
+@router.delete("/{item_id}")
+def delete_inventory(item_id: int, db: Session = Depends(get_db), user=Depends(can_write)):
+    with _http_errors():
+        InventoryFacade(db).delete_inventory(item_id)
     return {"message": "Inventory deleted"}
 
 
-@router.get("/{name}/logs", response_model=list[InventoryLogDTO])
-def get_logs(
-    name: str,
-    db: Session = Depends(DatabaseAdapter.get_db),
-    user=Depends(require_permission("inventory.read"))
-):
-    facade = InventoryFacade(db)
-    return facade.get_inventory_logs(name)
+@router.get("/{item_id}/logs", response_model=list[InventoryLogDTO])
+def get_logs(item_id: int, db: Session = Depends(get_db), user=Depends(can_read)):
+    with _http_errors():
+        return InventoryFacade(db).get_inventory_logs(item_id)

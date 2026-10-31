@@ -1,21 +1,13 @@
-import os
-
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-load_dotenv()
+from backend.core.config import get_settings
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-DIRECT_DATABASE_URL = os.getenv("DIRECT_DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL is not set. Expected a Postgres URL like:\n"
-        "postgresql+psycopg2://user:pass@host:5432/dbname"
-    )
+settings = get_settings()
 
 engine = create_engine(
-    DATABASE_URL,
+    settings.DATABASE_URL,
+    echo=settings.DB_ECHO,
     future=True,
     pool_pre_ping=True,
 )

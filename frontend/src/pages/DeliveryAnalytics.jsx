@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import api from "../api";
-import { MOCK_MODE } from "../config";
 
 import LineChart from "../components/charts/LineChart";
 import BarChart from "../components/charts/BarChart";
 import PieChart from "../components/charts/PieChart";
 import HistogramChart from "../components/charts/HistogramChart";
-import { useRealtime } from "../realtime/RealtimeProvider";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
+import { InsightsPanel } from "../components/ui";
+import { tzOffsetMinutes } from "../lib/format";
 function Panel({ title, subtitle, right, children }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -34,9 +35,8 @@ function Badge({ text }) {
 export default function DeliveryAnalytics() {
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
-  const { lastEvent } = useRealtime();
 
-  const [settings, setSettings] = useState({
+  const [settings] = useState({
     days_month: 30,
     days_year: 365,
     top_n: 10,
@@ -50,80 +50,9 @@ export default function DeliveryAnalytics() {
   const fetchOverview = async () => {
     setError("");
 
-    if (MOCK_MODE) {
-      const mkSeries = (days, window) =>
-        Array.from({ length: Math.min(days, 60) }).map((_, i) => {
-          const base = days > 60 ? 80 : 12;
-          const v = Math.max(0, Math.round(base + Math.sin(i / 3) * (base / 3) + (i % 5)));
-          return {
-            day: `2026-08-${String((i % 30) + 1).padStart(2, "0")}`,
-            count: v,
-            moving_avg: Math.max(0, v - 2),
-          };
-        });
-
-      setData({
-        moving_average: {
-          month: { days: settings.days_month, window: settings.ma_window_month, series: mkSeries(settings.days_month, settings.ma_window_month) },
-          year: { days: settings.days_year, window: settings.ma_window_year, series: mkSeries(settings.days_year, settings.ma_window_year) },
-        },
-        most_ordered_items: {
-          month: {
-            days: settings.days_month,
-            top_n: settings.top_n,
-            items: [
-              { product_name: "Widget A", quantity: 340 },
-              { product_name: "Widget B", quantity: 280 },
-              { product_name: "Tape", quantity: 210 },
-              { product_name: "Packaging", quantity: 190 },
-            ],
-          },
-          year: {
-            days: settings.days_year,
-            top_n: settings.top_n,
-            items: [
-              { product_name: "Widget A", quantity: 4200 },
-              { product_name: "Widget B", quantity: 3600 },
-              { product_name: "Packaging", quantity: 2500 },
-              { product_name: "Tape", quantity: 2200 },
-              { product_name: "Spare Part", quantity: 900 },
-            ],
-          },
-        },
-        status_distribution: {
-          month: {
-            days: settings.days_month,
-            consolidated: { active: 48, delivered: 320, cancelled: 14, failed: 6, other: 2 },
-            raw: {},
-          },
-          year: {
-            days: settings.days_year,
-            consolidated: { active: 60, delivered: 4020, cancelled: 210, failed: 90, other: 14 },
-            raw: {},
-          },
-        },
-        peak_delivery_time_histogram: {
-          month: {
-            days: settings.days_month,
-            hours: Array.from({ length: 24 }).map((_, h) => ({
-              hour: h,
-              count: h >= 10 && h <= 18 ? Math.round(8 + (18 - Math.abs(14 - h)) * 3) : Math.round(2 + (h % 3)),
-            })),
-          },
-          year: {
-            days: settings.days_year,
-            hours: Array.from({ length: 24 }).map((_, h) => ({
-              hour: h,
-              count: h >= 10 && h <= 18 ? Math.round(40 + (18 - Math.abs(14 - h)) * 15) : Math.round(10 + (h % 5)),
-            })),
-          },
-        },
-      });
-      return;
-    }
 
     try {
-      const res = await api.get("/analytics/delivery/overview", { params: settings });
+      const res = await api.get("/analytics/delivery/overview", { params: { ...settings, tz_offset_minutes: tzOffsetMinutes() } });
       setData(res.data);
     } catch (e) {
       setError(extractErrorDetail(e));
@@ -134,15 +63,7 @@ export default function DeliveryAnalytics() {
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    if (
-      lastEvent?.type === "analytics.updated" &&
-      lastEvent?.module === "delivery"
-    ) {
-      fetchOverview();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent]);
+  useAnalyticsRefresh("delivery", fetchOverview);
   // ---------- Chart transforms
   const monthMA = useMemo(() => {
     const s = data?.moving_average?.month?.series || [];
@@ -237,6 +158,8 @@ export default function DeliveryAnalytics() {
           </div>
         )}
 
+        <div className="mt-8"><InsightsPanel module="delivery" /></div>
+
         {!data ? (
           <div className="mt-8 text-gray-500">Loading analytics…</div>
         ) : (
@@ -303,7 +226,7 @@ export default function DeliveryAnalytics() {
             {/* Peak delivery time histogram */}
             <div className="grid grid-cols-12 gap-6 mt-8">
               <div className="col-span-12 xl:col-span-6">
-                <Panel title="Peak Delivery Time (Month)" subtitle="Delivered completion hour (0–23)">
+                <Panel title="Peak Delivery Time (Month)" subtitle="Hour deliveries were completed, in your local time (rounded to the hour)">
                   <HistogramChart bins={monthHourHist.bins} counts={monthHourHist.counts} />
                   <div className="text-xs text-gray-500 mt-3">
                     Hours represent completion time of delivered orders.
@@ -312,7 +235,7 @@ export default function DeliveryAnalytics() {
               </div>
 
               <div className="col-span-12 xl:col-span-6">
-                <Panel title="Peak Delivery Time (Year)" subtitle="Delivered completion hour (0–23)">
+                <Panel title="Peak Delivery Time (Year)" subtitle="Hour deliveries were completed, in your local time (rounded to the hour)">
                   <HistogramChart bins={yearHourHist.bins} counts={yearHourHist.counts} />
                 </Panel>
               </div>

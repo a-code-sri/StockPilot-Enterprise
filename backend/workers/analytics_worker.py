@@ -1,336 +1,172 @@
+"""
+Analytics outbox worker.
+
+    python -m backend.workers.analytics_worker
+
+Waits for NOTIFY on the outbox channel (with a periodic sweep as a safety net),
+claims due events, runs the matching projection handler, and publishes a realtime
+notification for each processed event. Reconnects automatically if the database
+connection drops.
+"""
+
 from __future__ import annotations
 
 import json
 import logging
-import os
-import psycopg2
 import select
 import time
+from datetime import timedelta
 from typing import Any
 
-from dotenv import load_dotenv
+import psycopg2
+import psycopg2.extensions
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-load_dotenv()
-
+from backend.core.config import get_settings
+from backend.core.database.registry import import_all_models
 from backend.core.database.session import SessionLocal, engine
+from backend.core.time import utcnow
+from backend.outbox import repository as outbox
 from backend.outbox.models import AnalyticsOutbox
-from backend.outbox.repository import (
-    fetch_and_lock_batch,
-    mark_done,
-    mark_failed,
-)
 from backend.workers.dispatcher import HandlerNotFound, dispatch
 
-
+settings = get_settings()
+logging.basicConfig(level=settings.LOG_LEVEL.upper(), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("analytics_worker")
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+
+PRUNE_INTERVAL_SECONDS = 3600
+RECONNECT_MAX_SECONDS = 30
 
 
-LISTEN_CHANNEL = os.getenv("OUTBOX_LISTEN_CHANNEL", "analytics_outbox")
-BATCH_SIZE = int(os.getenv("OUTBOX_BATCH_SIZE", "50"))
-POLL_TIMEOUT_SECONDS = int(os.getenv("OUTBOX_POLL_TIMEOUT", "10"))
-STALE_LOCK_SECONDS = int(os.getenv("STALE_LOCK_SECONDS", "300"))
-MAX_BACKOFF_SECONDS = int(os.getenv("OUTBOX_MAX_BACKOFF_SECONDS", "300"))
-
-REALTIME_CHANNEL = os.getenv(
-    "REALTIME_LISTEN_CHANNEL",
-    "realtime_events",
-)
-
-DIRECT_DATABASE_URL = os.getenv("DIRECT_DATABASE_URL")
-
-if not DIRECT_DATABASE_URL:
-    raise RuntimeError(
-        "DIRECT_DATABASE_URL is required for analytics worker LISTEN/NOTIFY"
-    )
-
-
-def publish_realtime_event(
-    db: Session,
-    *,
-    module: str,
-    event_type: str,
-    outbox_id: int,
-) -> None:
-
+def publish_realtime_event(db: Session, *, module: str, event_type: str, outbox_id: int) -> None:
     payload = json.dumps(
-        {
-            "type": "analytics.updated",
-            "module": module,
-            "event_type": event_type,
-            "outbox_id": outbox_id,
-        }
+        {"type": "analytics.updated", "module": module, "event_type": event_type, "outbox_id": outbox_id}
     )
-
-    print(
-        f"ABOUT TO PUBLISH REALTIME: "
-        f"channel={REALTIME_CHANNEL} payload={payload}"
-    )
-
+    # Delivered on commit, so clients never refetch before the projection is visible.
     db.execute(
         text("SELECT pg_notify(:channel, :payload)"),
-        {
-            "channel": REALTIME_CHANNEL,
-            "payload": payload,
-        },
+        {"channel": settings.REALTIME_LISTEN_CHANNEL, "payload": payload},
     )
-
-    print(
-        f"PG_NOTIFY EXECUTED: outbox_id={outbox_id}"
-    )
-
-
-def _backoff_seconds(attempts: int) -> int:
-    # simple exponential backoff: 10, 20, 40, 80 ... capped
-    base = 10 * (2 ** max(0, attempts))
-    return min(base, MAX_BACKOFF_SECONDS)
 
 
 def reclaim_stale_processing_rows(db: Session) -> int:
-    """
-    If a worker crashes mid-processing, some rows might remain stuck in 'processing'.
-    This reclaims them so they can be retried.
-    """
-    from datetime import datetime, timezone, timedelta
-
-    threshold = datetime.now(timezone.utc) - timedelta(
-        seconds=STALE_LOCK_SECONDS
-    )
-
+    """Rows left in 'processing' by a crashed worker become retryable again."""
+    threshold = utcnow() - timedelta(seconds=settings.STALE_LOCK_SECONDS)
     rows = (
         db.query(AnalyticsOutbox)
         .filter(
-            AnalyticsOutbox.status == "processing",
+            AnalyticsOutbox.status == outbox.PROCESSING,
             AnalyticsOutbox.locked_at.isnot(None),
             AnalyticsOutbox.locked_at < threshold,
         )
+        .with_for_update(skip_locked=True)
         .all()
     )
-
     for r in rows:
-        r.status = "failed"
-        r.last_error = (
-            (r.last_error or "")
-            + "\n[reclaimed stale processing lock]"
-        )
-        r.available_at = datetime.now(timezone.utc)
-
-    if rows:
-        db.flush()
-
+        r.status = outbox.FAILED
+        r.last_error = ((r.last_error or "") + "\n[reclaimed stale processing lock]").strip()
+        r.available_at = utcnow()
+    db.flush()
     return len(rows)
 
 
+def _process_event(db: Session, ev: dict[str, Any]) -> bool:
+    """Process one claimed event in its own transaction. Returns True on success."""
+    outbox_id = ev["id"]
+    try:
+        dispatch(db=db, module=ev["module"], event_type=ev["event_type"], payload=ev["payload"], outbox_id=outbox_id)
+        row = db.get(AnalyticsOutbox, outbox_id)
+        if row:
+            outbox.mark_done(db, row)
+        publish_realtime_event(db, module=ev["module"], event_type=ev["event_type"], outbox_id=outbox_id)
+        db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        permanent = isinstance(exc, HandlerNotFound)
+        row = db.get(AnalyticsOutbox, outbox_id)
+        if row:
+            status = outbox.mark_failed(
+                db,
+                row,
+                error_message=f"{type(exc).__name__}: {exc}",
+                max_attempts=settings.OUTBOX_MAX_ATTEMPTS,
+                max_backoff=settings.OUTBOX_MAX_BACKOFF_SECONDS,
+                permanent=permanent,
+            )
+            db.commit()
+            log = logger.error if status == outbox.DEAD else logger.warning
+            log("Outbox %s (%s.%s) failed -> %s: %s", outbox_id, ev["module"], ev["event_type"], status, exc)
+        if not permanent:
+            logger.debug("Traceback for outbox %s", outbox_id, exc_info=True)
+        return False
+
+
 def process_pending_once() -> int:
-    """
-    Processes available outbox rows until none remain (in small batches).
-    Returns number of rows successfully marked done in this run.
-    """
+    """Process due rows in batches until none remain. Returns number succeeded."""
     done_count = 0
-
     db = SessionLocal()
-
     try:
         reclaimed = reclaim_stale_processing_rows(db)
-
+        db.commit()
         if reclaimed:
-            db.commit()
-            logger.warning(
-                "Reclaimed %s stale processing outbox rows",
-                reclaimed,
-            )
+            logger.warning("Reclaimed %s stale processing outbox rows", reclaimed)
 
         while True:
-            locked_rows = fetch_and_lock_batch(
-                db,
-                limit=BATCH_SIZE,
-            )
-
-            if not locked_rows:
-                db.commit()
-                break
-
-            # Snapshot needed fields before commit
-            # (avoid expiration issues)
-            events: list[dict[str, Any]] = [
-                {
-                    "id": r.id,
-                    "module": r.module,
-                    "event_type": r.event_type,
-                    "payload": r.payload,
-                    "attempts": int(r.attempts or 0),
-                }
-                for r in locked_rows
+            locked = outbox.fetch_and_lock_batch(db, limit=settings.OUTBOX_BATCH_SIZE)
+            events = [
+                {"id": r.id, "module": r.module, "event_type": r.event_type, "payload": r.payload}
+                for r in locked
             ]
-
-            # Persist "processing" status quickly
-            db.commit()
-
+            db.commit()  # persist 'processing' quickly
+            if not events:
+                break
             for ev in events:
-                outbox_id = ev["id"]
-                module = ev["module"]
-                event_type = ev["event_type"]
-                payload = ev["payload"]
-                attempts = ev["attempts"]
-
-                try:
-                    dispatch(
-                        db=db,
-                        module=module,
-                        event_type=event_type,
-                        payload=payload,
-                        outbox_id=outbox_id,
-                    )
-
-                    row = db.get(
-                        AnalyticsOutbox,
-                        outbox_id,
-                    )
-
-                    if row:
-                        mark_done(db, row)
-
-                    publish_realtime_event(
-                        db,
-                        module=module,
-                        event_type=event_type,
-                        outbox_id=outbox_id,
-                    )
-
-                    db.commit()
+                if _process_event(db, ev):
                     done_count += 1
-
-                except HandlerNotFound as e:
-                    db.rollback()
-
-                    row = db.get(
-                        AnalyticsOutbox,
-                        outbox_id,
-                    )
-
-                    if row:
-                        mark_failed(
-                            db,
-                            row,
-                            error_message=f"HandlerNotFound: {e}",
-                            backoff_seconds=_backoff_seconds(
-                                attempts
-                            ),
-                        )
-                        db.commit()
-
-                    logger.error(
-                        "Outbox %s handler not found: %s",
-                        outbox_id,
-                        e,
-                    )
-
-                except Exception as e:
-                    db.rollback()
-
-                    row = db.get(
-                        AnalyticsOutbox,
-                        outbox_id,
-                    )
-
-                    if row:
-                        mark_failed(
-                            db,
-                            row,
-                            error_message=str(e),
-                            backoff_seconds=_backoff_seconds(
-                                attempts
-                            ),
-                        )
-                        db.commit()
-
-                    logger.exception(
-                        "Outbox %s processing failed",
-                        outbox_id,
-                    )
-
     finally:
         db.close()
-
     return done_count
 
 
-def listen_and_process_forever() -> None:
-    """
-    LISTEN/NOTIFY driven loop (fast reaction), with periodic sweeps for safety.
-
-    The LISTEN connection intentionally uses the Neon direct connection,
-    while normal SQLAlchemy work continues to use SessionLocal().
-    """
-
-    # Persistent LISTEN connection must use the direct Neon connection.
-    raw_conn = psycopg2.connect(DIRECT_DATABASE_URL)
-
+def prune_old_events() -> None:
+    db = SessionLocal()
     try:
-        if engine.dialect.name != "postgresql":
-            raise RuntimeError(
-                f"analytics_worker requires PostgreSQL for LISTEN/NOTIFY, "
-                f"but current dialect is '{engine.dialect.name}'. "
-                f"Set DATABASE_URL to a postgres URL."
-            )
+        deleted = outbox.prune_done(db, older_than_days=settings.OUTBOX_RETENTION_DAYS)
+        db.commit()
+        if deleted:
+            logger.info("Pruned %s processed outbox rows", deleted)
+    finally:
+        db.close()
 
-        # Ensure NOTIFY events are delivered without needing explicit commits.
-        raw_conn.set_isolation_level(
-            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-        )
 
-        cur = raw_conn.cursor()
-        cur.execute(f"LISTEN {LISTEN_CHANNEL};")
+def _listen_loop() -> None:
+    raw_conn = psycopg2.connect(settings.listen_database_url)
+    try:
+        raw_conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        with raw_conn.cursor() as cur:
+            cur.execute(f'LISTEN "{settings.OUTBOX_LISTEN_CHANNEL}";')
+        logger.info("Worker LISTENing on channel '%s'", settings.OUTBOX_LISTEN_CHANNEL)
 
-        print(
-            f"Worker LISTENing on channel '{LISTEN_CHANNEL}'"
-        )
-
-        # Initial sweep on startup
         n = process_pending_once()
-
         if n:
-            print(
-                f"Processed {n} outbox event(s) on startup"
-            )
+            logger.info("Processed %s outbox event(s) on startup", n)
 
+        last_prune = 0.0
         while True:
-            # Wait for notifications or timeout
-            rlist, _, _ = select.select(
-                [raw_conn],
-                [],
-                [],
-                POLL_TIMEOUT_SECONDS,
-            )
-
-            if rlist:
+            readable, _, _ = select.select([raw_conn], [], [], settings.OUTBOX_POLL_TIMEOUT)
+            if readable:
                 raw_conn.poll()
+                raw_conn.notifies.clear()
 
-                # Drain notifications quickly
-                notify_count = 0
-
-                while raw_conn.notifies:
-                    raw_conn.notifies.pop(0)
-                    notify_count += 1
-
-                logger.debug(
-                    "Received %s NOTIFY message(s)",
-                    notify_count,
-                )
-
-            # Whether notified or timed out, run a sweep
             processed = process_pending_once()
-
             if processed:
-                print(
-                    f"Processed {processed} outbox event(s)"
-                )
+                logger.info("Processed %s outbox event(s)", processed)
 
-            # Tiny sleep prevents tight loop if DB is very fast and empty
-            time.sleep(0.2)
-
+            if time.monotonic() - last_prune > PRUNE_INTERVAL_SECONDS:
+                prune_old_events()
+                last_prune = time.monotonic()
     finally:
         try:
             raw_conn.close()
@@ -338,8 +174,30 @@ def listen_and_process_forever() -> None:
             pass
 
 
+def listen_and_process_forever() -> None:
+    if engine.dialect.name != "postgresql":
+        raise RuntimeError("analytics_worker requires PostgreSQL (LISTEN/NOTIFY).")
+
+    delay = 1.0
+    while True:
+        try:
+            _listen_loop()
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            logger.exception("Worker loop crashed; reconnecting in %.0fs", delay)
+            time.sleep(delay)
+            delay = min(delay * 2, RECONNECT_MAX_SECONDS)
+        else:
+            delay = 1.0
+
+
 def main() -> None:
-    listen_and_process_forever()
+    import_all_models()
+    try:
+        listen_and_process_forever()
+    except KeyboardInterrupt:
+        logger.info("Worker stopped")
 
 
 if __name__ == "__main__":

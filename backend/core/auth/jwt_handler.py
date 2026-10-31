@@ -1,26 +1,28 @@
-from datetime import datetime, timedelta
-from jose import JWTError, jwt
+from datetime import timedelta
 from typing import Optional
 
-SECRET_KEY = "supersecretkey"  # Move to config later
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+import jwt
+
+from backend.core.config import get_settings
+from backend.core.time import utcnow
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    settings = get_settings()
     to_encode = data.copy()
-
-    expire = datetime.utcnow() + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    now = utcnow()
+    to_encode.update(
+        {
+            "iat": now,
+            "exp": now + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)),
+        }
     )
-
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str):
+def decode_access_token(token: str) -> Optional[dict]:
+    settings = get_settings()
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.PyJWTError:
         return None
