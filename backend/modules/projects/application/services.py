@@ -5,7 +5,14 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
 from backend.modules.projects.analytics import to_task_inputs
-from backend.modules.projects.domain.scheduling import CycleError, compute_schedule, resource_conflicts
+from backend.modules.projects.application.dtos import check_pert
+from backend.modules.projects.domain.scheduling import (
+    CycleError,
+    TaskInput,
+    compute_schedule,
+    resource_conflicts,
+    topological_order,
+)
 from backend.modules.projects.infrastructure.repository import ProjectsValidationError
 
 
@@ -48,6 +55,26 @@ class ProjectsService:
             raise HTTPException(status_code=404, detail="Project not found.")
         return p
 
+    def update_project(self, project_id: int, dto):
+        project = self.get_project(project_id)
+        fields = dto.model_fields_set
+        start = dto.start_date if dto.start_date else project.start_date
+        deadline = dto.deadline if dto.deadline else project.deadline
+        if deadline < start:
+            raise HTTPException(status_code=400, detail="Deadline must be on or after the start date.")
+
+        with self._atomic("A project with this title already exists."):
+            if dto.title:
+                project.title = dto.title.strip()
+            if "description" in fields:
+                project.description = (dto.description or "").strip() or None
+            project.start_date, project.deadline = start, deadline
+            self.db.flush()
+            if dto.resource_employee_ids is not None:
+                self.repo.set_project_resources(project.id, dto.resource_employee_ids)
+        self.db.refresh(project)
+        return project
+
     def delete_project(self, project_id: int) -> None:
         project = self.get_project(project_id)
         with self._atomic("Project could not be deleted."):
@@ -71,6 +98,48 @@ class ProjectsService:
                 dto.predecessor_task_ids,
                 dto.resource_employee_ids,
             )
+        self.db.refresh(task)
+        return task
+
+    def update_task(self, project_id: int, task_id: int, dto):
+        self.get_project(project_id)
+        task = self.repo.get_task(project_id, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        fields = dto.model_fields_set
+
+        pert_changed = bool({"optimistic", "most_likely", "pessimistic"} & fields)
+        o = dto.optimistic if "optimistic" in fields else task.optimistic
+        m = dto.most_likely if "most_likely" in fields else task.most_likely
+        p = dto.pessimistic if "pessimistic" in fields else task.pessimistic
+        try:
+            check_pert(o, m, p)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if dto.predecessor_task_ids is not None:
+            # The edited graph must stay acyclic (no task may end up waiting for itself).
+            graph = self.repo.predecessor_map(project_id)
+            graph[task.id] = [x for x in dict.fromkeys(dto.predecessor_task_ids) if x in graph]
+            try:
+                topological_order({tid: TaskInput(tid, "", 1, predecessor_ids=tuple(ps)) for tid, ps in graph.items()})
+            except CycleError:
+                raise HTTPException(
+                    status_code=400, detail="Those predecessors would create a dependency loop (a task would wait for itself)."
+                )
+
+        with self._atomic("Task violates a constraint (check PERT estimates and durations)."):
+            if dto.name:
+                task.name = dto.name.strip()
+            if "description" in fields:
+                task.description = (dto.description or "").strip() or None
+            if dto.duration_days:
+                task.duration_days = float(dto.duration_days)
+            if pert_changed:
+                task.optimistic, task.most_likely, task.pessimistic = o, m, p
+            self.db.flush()
+            if dto.predecessor_task_ids is not None or dto.resource_employee_ids is not None:
+                self.repo.set_task_links(task, dto.predecessor_task_ids, dto.resource_employee_ids)
         self.db.refresh(task)
         return task
 

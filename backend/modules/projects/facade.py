@@ -17,6 +17,12 @@ class ProjectsFacade:
     def get_project(self, project_id: int):
         return self.service.get_project(project_id)
 
+    def update_project(self, project_id: int, dto):
+        return self.service.update_project(project_id, dto)
+
+    def update_task(self, project_id: int, task_id: int, dto):
+        return self.service.update_task(project_id, task_id, dto)
+
     def delete_project(self, project_id: int):
         return self.service.delete_project(project_id)
 

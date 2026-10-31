@@ -7,8 +7,10 @@ from backend.modules.projects.application.dtos import (
     ProjectCreateDTO,
     ProjectDetailDTO,
     ProjectListDTO,
+    ProjectUpdateDTO,
     TaskCreateDTO,
     TaskDTO,
+    TaskUpdateDTO,
 )
 from backend.modules.projects.facade import ProjectsFacade
 
@@ -66,6 +68,12 @@ def get_project(project_id: int, db: Session = Depends(get_db), user=Depends(can
     return _project_row(ProjectsFacade(db).get_project(project_id), detail=True)
 
 
+@router.put("/{project_id}", response_model=ProjectDetailDTO)
+def update_project(project_id: int, dto: ProjectUpdateDTO, db: Session = Depends(get_db), user=Depends(can_write)):
+    """Change title, description, dates and/or team. Omitted fields stay as they are."""
+    return _project_row(ProjectsFacade(db).update_project(project_id, dto), detail=True)
+
+
 @router.delete("/{project_id}")
 def delete_project(project_id: int, db: Session = Depends(get_db), user=Depends(can_write)):
     ProjectsFacade(db).delete_project(project_id)
@@ -82,6 +90,14 @@ def create_task(project_id: int, dto: TaskCreateDTO, db: Session = Depends(get_d
 @router.get("/{project_id}/tasks", response_model=list[TaskDTO])
 def list_tasks(project_id: int, db: Session = Depends(get_db), user=Depends(can_read)):
     return [_task_row(t) for t in ProjectsFacade(db).list_tasks(project_id)]
+
+
+@router.put("/{project_id}/tasks/{task_id}", response_model=TaskDTO)
+def update_task(
+    project_id: int, task_id: int, dto: TaskUpdateDTO, db: Session = Depends(get_db), user=Depends(can_write)
+):
+    """Edit a task, including its predecessors and assigned people. Dependency loops are rejected."""
+    return _task_row(ProjectsFacade(db).update_task(project_id, task_id, dto))
 
 
 @router.delete("/{project_id}/tasks/{task_id}")

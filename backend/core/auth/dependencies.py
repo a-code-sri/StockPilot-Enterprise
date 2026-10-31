@@ -26,6 +26,9 @@ def user_from_token(db: Session, token: str | None) -> models.User | None:
     user = db.query(models.User).filter(models.User.username == payload["sub"]).first()
     if user is None or not user.is_active:
         return None
+    # Tokens issued before the last password change/reset are no longer valid.
+    if payload.get("ver", 0) != (user.token_version or 0):
+        return None
     return user
 
 

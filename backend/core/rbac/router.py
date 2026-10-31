@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, selectinload
 
+from backend.core.auth import passwords
 from backend.core.auth.models import User
 from backend.core.database.adapter import get_db
 from backend.core.rbac import models, schemas
@@ -87,3 +88,16 @@ def set_user_status(
 ):
     target = _get_user(db, user_id)
     return _user_row(RBACService.set_user_active(db, target, body.is_active, acting_user))
+
+
+@router.post("/users/{user_id}/reset-link", response_model=schemas.ResetLinkResponse)
+def create_reset_link(user_id: int, db: Session = Depends(get_db), acting_user=Depends(manage)):
+    """
+    One-time password reset link for a user (valid PASSWORD_RESET_TTL_MINUTES).
+    Give it to them securely; it is also emailed when SMTP is configured.
+    """
+    target = _get_user(db, user_id)
+    if not target.is_active:
+        raise HTTPException(status_code=400, detail="Activate the account before resetting its password")
+    url, expires_at = passwords.create_reset_link(db, target, created_by=acting_user)
+    return {"reset_url": url, "expires_at": expires_at, "emailed": passwords.email_reset_link(target, url)}
