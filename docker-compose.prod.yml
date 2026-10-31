@@ -1,0 +1,36 @@
+# Production overlay: public HTTPS via Caddy (free, auto-renewing Let's Encrypt certificate).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile ai up -d --build
+#
+# Requires in .env: DOMAIN (DNS A record pointing at this server) and ACME_EMAIL.
+# Only ports 80/443 are exposed; the app's own ports are closed to the internet.
+# See docs/DEPLOYMENT.md.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env, e.g. stockpilot.example.com}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (certificate expiry notices)}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+  web:
+    ports: !reset []   # reachable only through Caddy
+
+  api:
+    ports: !reset []   # Swagger/direct API not exposed publicly
+
+volumes:
+  caddy_data:
+  caddy_config:

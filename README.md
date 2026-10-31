@@ -28,6 +28,8 @@ offline verification of Indian business registrations (GSTIN / PAN / CIN).
 | AI insights | "Summarize" button on every analytics page |
 | Business profile | GSTIN checksum, PAN/CIN format and cross-checks, then admin approval |
 | Users & roles | Role-based access (`module.read` / `module.write`), user activation, admin bootstrap |
+| Accounts & passwords | Change password, one-time admin reset links, optional "forgot password" emails; password changes sign out other sessions |
+| Backups | Daily automatic database dumps with retention and one-command restore |
 
 ## Quick start (Docker)
 
@@ -45,7 +47,9 @@ Open **http://localhost:8080** and sign in with `ADMIN_USERNAME` / `ADMIN_PASSWO
 The API (Swagger at `/docs`) is also published on `http://localhost:8000` for the local machine only.
 
 What starts: `db` (PostgreSQL 16, data in the `pgdata` volume), `api` (applies migrations on start),
-`worker` (analytics), `web` (nginx serving the app and proxying `/api`).
+`worker` (analytics), `web` (nginx serving the app and proxying `/api`), `backup` (daily dumps to `./backups`).
+
+To put it on the internet with HTTPS, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 Optional profiles:
 
@@ -88,6 +92,30 @@ Passing moves the profile to *awaiting review*; an admin then compares against t
 certificates and approves (*verified*) or rejects. Editing any registration field resets it.
 Offline checks prove the numbers are well-formed and consistent, not that the GST portal
 lists them as active; a live lookup needs a paid GSP API and can be added later.
+
+## Backups
+
+The `backup` service dumps the database every `BACKUP_INTERVAL_HOURS` (default 24) into `./backups`
+and deletes dumps older than `BACKUP_RETENTION_DAYS` (default 14). It skips a run, and logs a warning,
+if less than `BACKUP_MIN_FREE_MB` is free, so backups can never fill the disk.
+
+```bash
+docker compose exec backup backup.sh now        # back up right now
+docker compose exec backup backup.sh list
+docker compose stop api worker                  # restore: stop the app first
+docker compose exec backup backup.sh restore stockpilot-YYYYmmdd-HHMMSS.dump
+docker compose start api worker
+```
+
+Copy the files somewhere else (cloud drive, USB) from time to time; a backup on the same disk
+doesn't survive that disk failing.
+
+## Passwords
+
+- Users change their own password under **My account** (click your name in the sidebar).
+- An admin can click **Reset password** on *Users & Roles* to get a one-time link (valid
+  `PASSWORD_RESET_TTL_MINUTES`, default 30) to send to the user.
+- With `SMTP_*` settings in `.env`, "Forgot password?" on the login page emails the link itself.
 
 ## Local development (without Docker)
 
