@@ -125,10 +125,10 @@ export default function Sidebar() {
           </div>
           {user && (
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate" title={user.email}>
+              <NavLink to="/account" className="truncate hover:text-indigo-300" title="My account / change password">
                 {user.username}
                 <span className="text-gray-500"> · {user.roles.map((r) => r.name).join(", ") || "no role"}</span>
-              </span>
+              </NavLink>
               <button
                 type="button"
                 onClick={handleLogout}

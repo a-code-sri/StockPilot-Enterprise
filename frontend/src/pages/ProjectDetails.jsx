@@ -1,724 +1,390 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import Sidebar from "../components/Sidebar";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import api, { errorMessage } from "../api";
+import { useAuth } from "../context/AuthContext";
+import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
+import { number } from "../lib/format";
 
-function parseCsvList(s) {
-  return (s || "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+/** Pick employees from a list when we can read the organization; otherwise type IDs. */
+function PeoplePicker({ employees, value, onChange }) {
+  if (!employees) {
+    return (
+      <input className={`${inputClass} w-full`} placeholder="Employee IDs, comma separated"
+        value={value.join(", ")} onChange={(e) => onChange(csv(e.target.value))} />
+    );
+  }
+  if (employees.length === 0) return <p className="text-sm text-gray-500">No employees yet (add them under Organization).</p>;
+  return (
+    <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+      {employees.map((e) => {
+        const on = value.includes(e.employee_id);
+        return (
+          <label key={e.employee_id}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs cursor-pointer ${
+              on ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200" : "border-gray-700 text-gray-400"
+            }`}>
+            <input type="checkbox" className="sr-only" checked={on}
+              onChange={() => onChange(on ? value.filter((x) => x !== e.employee_id) : [...value, e.employee_id])} />
+            {e.name} <span className="text-gray-500">{e.employee_id}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProjectForm({ project, employees, onSaved, onCancel, onError }) {
+  const [form, setForm] = useState({
+    title: project.title, description: project.description || "", start_date: project.start_date,
+    deadline: project.deadline, resource_employee_ids: project.resource_employee_ids,
+  });
+  const set = (f) => (e) => setForm({ ...form, [f]: e.target.value });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.put(`/projects/${project.id}`, { ...form, description: form.description.trim() || null });
+      onSaved(res.data);
+    } catch (err) {
+      onError(errorMessage(err, "Could not save project"));
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      <div className="flex flex-wrap gap-3">
+        <input className={`${inputClass} w-80`} required minLength={2} maxLength={200} value={form.title} onChange={set("title")} aria-label="Title" />
+        <label className="flex items-center gap-2 text-sm text-gray-400">Start
+          <input className={inputClass} type="date" required value={form.start_date} onChange={set("start_date")} /></label>
+        <label className="flex items-center gap-2 text-sm text-gray-400">Deadline
+          <input className={inputClass} type="date" required min={form.start_date} value={form.deadline} onChange={set("deadline")} /></label>
+      </div>
+      <textarea className={`${inputClass} w-full min-h-[70px]`} maxLength={5000} placeholder="Description"
+        value={form.description} onChange={set("description")} />
+      <div>
+        <div className="text-xs uppercase text-gray-400 mb-2">Team</div>
+        <PeoplePicker employees={employees} value={form.resource_employee_ids}
+          onChange={(ids) => setForm({ ...form, resource_employee_ids: ids })} />
+      </div>
+      <div className="flex gap-2">
+        <button className={buttonClass.primary}>Save project</button>
+        <button type="button" className={buttonClass.secondary} onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+const EMPTY_TASK = { name: "", description: "", duration_days: "", usePert: false, optimistic: "", most_likely: "", pessimistic: "",
+  predecessor_task_ids: [], resource_employee_ids: [] };
+
+function TaskForm({ projectId, tasks, employees, editing, onSaved, onCancel, onError }) {
+  const [form, setForm] = useState(() =>
+    editing
+      ? { ...EMPTY_TASK, ...editing, description: editing.description || "", duration_days: String(editing.duration_days),
+          usePert: editing.optimistic != null, optimistic: editing.optimistic ?? "", most_likely: editing.most_likely ?? "",
+          pessimistic: editing.pessimistic ?? "" }
+      : EMPTY_TASK
+  );
+  const set = (f) => (e) => setForm({ ...form, [f]: e.target.value });
+  const others = tasks.filter((t) => t.id !== editing?.id);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const num = (v) => (v === "" ? null : Number(v));
+    const body = {
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      duration_days: Number(form.duration_days),
+      optimistic: form.usePert ? num(form.optimistic) : null,
+      most_likely: form.usePert ? num(form.most_likely) : null,
+      pessimistic: form.usePert ? num(form.pessimistic) : null,
+      predecessor_task_ids: form.predecessor_task_ids,
+      resource_employee_ids: form.resource_employee_ids,
+    };
+    try {
+      if (editing) await api.put(`/projects/${projectId}/tasks/${editing.id}`, body);
+      else await api.post(`/projects/${projectId}/tasks`, body);
+      onSaved();
+    } catch (err) {
+      onError(errorMessage(err, "Could not save task"));
+    }
+  };
+
+  const toggleDep = (id) =>
+    setForm({ ...form, predecessor_task_ids: form.predecessor_task_ids.includes(id)
+      ? form.predecessor_task_ids.filter((x) => x !== id) : [...form.predecessor_task_ids, id] });
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="flex flex-wrap gap-3">
+        <input className={`${inputClass} w-72`} required maxLength={200} placeholder="Task name" value={form.name} onChange={set("name")} />
+        <input className={`${inputClass} w-36`} required type="number" min="0.1" step="0.1" placeholder="Duration (days)"
+          value={form.duration_days} onChange={set("duration_days")} />
+        <label className="flex items-center gap-2 text-sm text-gray-300">
+          <input type="checkbox" checked={form.usePert} onChange={(e) => setForm({ ...form, usePert: e.target.checked })} />
+          Uncertain? Use three-point (PERT) estimate
+        </label>
+      </div>
+      {form.usePert && (
+        <div className="flex flex-wrap gap-3 items-center text-sm text-gray-400">
+          <input className={`${inputClass} w-28`} required type="number" min="0.1" step="0.1" placeholder="Best case" value={form.optimistic} onChange={set("optimistic")} />
+          <input className={`${inputClass} w-28`} required type="number" min="0.1" step="0.1" placeholder="Most likely" value={form.most_likely} onChange={set("most_likely")} />
+          <input className={`${inputClass} w-28`} required type="number" min="0.1" step="0.1" placeholder="Worst case" value={form.pessimistic} onChange={set("pessimistic")} />
+          <span>days — scheduling uses (best + 4×likely + worst) / 6</span>
+        </div>
+      )}
+      <textarea className={`${inputClass} w-full`} maxLength={5000} placeholder="Description (optional)" value={form.description} onChange={set("description")} />
+      <div>
+        <div className="text-xs uppercase text-gray-400 mb-2">Can only start after</div>
+        {others.length === 0 ? <p className="text-sm text-gray-500">No other tasks yet.</p> : (
+          <div className="flex flex-wrap gap-2">
+            {others.map((t) => (
+              <label key={t.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs cursor-pointer ${
+                form.predecessor_task_ids.includes(t.id) ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200" : "border-gray-700 text-gray-400"}`}>
+                <input type="checkbox" className="sr-only" checked={form.predecessor_task_ids.includes(t.id)} onChange={() => toggleDep(t.id)} />
+                {t.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <div>
+        <div className="text-xs uppercase text-gray-400 mb-2">People</div>
+        <PeoplePicker employees={employees} value={form.resource_employee_ids}
+          onChange={(ids) => setForm({ ...form, resource_employee_ids: ids })} />
+      </div>
+      <div className="flex gap-2">
+        <button className={buttonClass.primary}>{editing ? "Save task" : "Add task"}</button>
+        {onCancel && <button type="button" className={buttonClass.secondary} onClick={onCancel}>Cancel</button>}
+      </div>
+    </form>
+  );
+}
+
+function Gantt({ simulation, windowDays }) {
+  const span = Math.max(simulation.project_duration_days, windowDays, 1);
+  const critical = new Set(simulation.critical_path_task_ids);
+  const pct = (d) => `${(d / span) * 100}%`;
+  return (
+    <div className="space-y-2">
+      {simulation.tasks.map((t) => (
+        <div key={t.id} className="grid grid-cols-[180px_1fr] items-center gap-3 text-sm">
+          <div className="truncate" title={t.name}>{t.name}</div>
+          <div className="relative h-6 rounded bg-gray-800/60">
+            <div className="absolute top-0 bottom-0 border-r-2 border-dashed border-red-400/70" style={{ left: pct(windowDays) }}
+              title="Deadline" />
+            <div
+              className={`absolute top-1 bottom-1 rounded ${critical.has(t.id) ? "bg-red-500/80" : "bg-indigo-500/70"}`}
+              style={{ left: pct(t.ES), width: `max(${pct(t.EF - t.ES)}, 4px)` }}
+              title={`${t.planned_start} → ${t.planned_end} · ${number(t.expected_duration_days, 1)} days · slack ${number(t.float, 1)}`}
+            />
+          </div>
+        </div>
+      ))}
+      <div className="grid grid-cols-[180px_1fr] gap-3 text-xs text-gray-500">
+        <div />
+        <div className="flex justify-between"><span>day 0</span><span>day {number(span, 0)}</span></div>
+      </div>
+      <p className="text-xs text-gray-500">
+        <span className="inline-block w-3 h-3 rounded bg-red-500/80 align-middle" /> critical path (any delay moves the end date) ·{" "}
+        <span className="inline-block w-3 h-3 rounded bg-indigo-500/70 align-middle" /> has slack · dashed line = deadline
+      </p>
+    </div>
+  );
 }
 
 export default function ProjectDetails() {
   const { id } = useParams();
   const projectId = Number(id);
-  const navigate = useNavigate();
-
-  const [activeTab, setActiveTab] = useState("details");
+  const { can } = useAuth();
+  const canWrite = can("projects.write");
 
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
-
   const [simulation, setSimulation] = useState(null);
-
+  const [employees, setEmployees] = useState(null);
+  const [editingProject, setEditingProject] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
+  const [taskFormKey, setTaskFormKey] = useState(0);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
 
-  const [taskForm, setTaskForm] = useState({
-    name: "",
-    description: "",
-    duration_days: "",
-    optimistic: "",
-    most_likely: "",
-    pessimistic: "",
-    predecessorsCsv: "",
-    resourcesCsv: "",
-  });
-
-  const titleGradient =
-    "bg-gradient-to-r from-indigo-400 to-purple-500 bg-clip-text text-transparent";
-
-  const clearMessages = () => {
-    setError("");
-    setInfo("");
-  };
-
-  const extractErrorDetail = (e) => errorMessage(e);
-
-  const predecessor_task_ids = useMemo(
-    () =>
-      parseCsvList(taskForm.predecessorsCsv)
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n)),
-    [taskForm.predecessorsCsv]
-  );
-
-  const resource_employee_ids = useMemo(
-    () => parseCsvList(taskForm.resourcesCsv),
-    [taskForm.resourcesCsv]
-  );
-
-  const fetchProject = async () => {
-    clearMessages();
-
+  const load = useCallback(async () => {
     try {
-      const res = await api.get(`/projects/${projectId}`);
-      setProject(res.data);
-    } catch (e) {
-      setError(extractErrorDetail(e));
+      const [p, t] = await Promise.all([api.get(`/projects/${projectId}`), api.get(`/projects/${projectId}/tasks`)]);
+      setProject(p.data);
+      setTasks(t.data);
+      try {
+        setSimulation((await api.post(`/projects/${projectId}/simulate`)).data);
+      } catch (err) {
+        setSimulation(null);
+        setError(errorMessage(err, "Could not schedule this project"));
+      }
+    } catch (err) {
+      setError(errorMessage(err, "Could not load project"));
     }
-  };
-
-  const fetchTasks = async () => {
-    clearMessages();
-
-    try {
-      const res = await api.get(`/projects/${projectId}/tasks`);
-      setTasks(res.data);
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  useEffect(() => {
-    fetchProject();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
-    if (!project) return;
-    fetchTasks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project]);
+    load();
+  }, [load]);
 
-  const createTask = async () => {
-    clearMessages();
+  useEffect(() => {
+    if (!can("organization.read")) return;
+    api.get("/organization/employees", { params: { limit: 1000 } }).then((r) => setEmployees(r.data)).catch(() => {});
+  }, [can]);
 
-    if (!taskForm.name.trim()) return setError("Task name is required.");
-    const duration = Number(taskForm.duration_days);
-    if (!Number.isFinite(duration) || duration <= 0) return setError("duration_days must be > 0.");
+  const taskName = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t.name])), [tasks]);
+  const personName = useMemo(
+    () => Object.fromEntries((employees || []).map((e) => [e.employee_id, e.name])), [employees]);
 
-    // PERT optional, but if any filled then all must be filled
-    const o = taskForm.optimistic === "" ? null : Number(taskForm.optimistic);
-    const m = taskForm.most_likely === "" ? null : Number(taskForm.most_likely);
-    const p = taskForm.pessimistic === "" ? null : Number(taskForm.pessimistic);
-
-    const anyPert = [o, m, p].some((x) => x != null);
-    const allPert = [o, m, p].every((x) => x != null);
-
-    if (anyPert && !allPert) return setError("PERT requires optimistic, most_likely, pessimistic together.");
-    if (allPert && !(o <= m && m <= p)) return setError("PERT requires optimistic <= most_likely <= pessimistic.");
-
+  const deleteTask = async (t) => {
+    if (!window.confirm(`Delete task "${t.name}"? Tasks that depend on it will no longer wait for it.`)) return;
     try {
-      await api.post(`/projects/${projectId}/tasks`, {
-        name: taskForm.name.trim(),
-        description: taskForm.description?.trim() || null,
-        duration_days: duration,
-        optimistic: o,
-        most_likely: m,
-        pessimistic: p,
-        predecessor_task_ids,
-        resource_employee_ids,
-      });
-
-      setInfo("Task created.");
-      setTaskForm({
-        name: "",
-        description: "",
-        duration_days: "",
-        optimistic: "",
-        most_likely: "",
-        pessimistic: "",
-        predecessorsCsv: "",
-        resourcesCsv: "",
-      });
-      await fetchTasks();
-    } catch (e) {
-      setError(extractErrorDetail(e));
+      await api.delete(`/projects/${projectId}/tasks/${t.id}`);
+      if (editingTask?.id === t.id) setEditingTask(null);
+      load();
+    } catch (err) {
+      setError(errorMessage(err, "Could not delete task"));
     }
   };
-
-  const deleteTask = async (taskId) => {
-    clearMessages();
-
-    try {
-      await api.delete(`/projects/${projectId}/tasks/${taskId}`);
-      setInfo("Task deleted.");
-      await fetchTasks();
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const runSimulation = async () => {
-    clearMessages();
-
-    if (!project) return;
-
-    try {
-      const res = await api.post(`/projects/${projectId}/simulate`);
-      setSimulation(res.data);
-      setInfo("Simulation complete.");
-    } catch (e) {
-      setError(extractErrorDetail(e));
-    }
-  };
-
-  const criticalSet = useMemo(() => {
-    const ids = simulation?.critical_path_task_ids || [];
-    return new Set(ids);
-  }, [simulation]);
 
   if (!project) {
     return (
-      <div className="flex bg-gray-950 text-gray-200 min-h-screen">
-        <Sidebar />
-        <div className="flex-1 p-10">
-          <div className="text-gray-400">Loading project...</div>
-          {error && (
-            <div className="mt-6 bg-red-950/40 border border-red-900 text-red-200 px-4 py-3 rounded-xl">
-              <div className="font-semibold">Error</div>
-              <div className="text-sm mt-1">{error}</div>
-            </div>
-          )}
-        </div>
-      </div>
+      <Page title="Project">
+        <ErrorBanner message={error} />
+        {!error && <p className="text-gray-400">Loading…</p>}
+      </Page>
     );
   }
 
-  return (
-    <div className="flex bg-gray-950 text-gray-200 min-h-screen">
-      <Sidebar />
-
-      <div className="flex-1 p-10">
-        <div className="flex items-start justify-between gap-6">
-          <div>
-            <button
-              onClick={() => navigate("/projects")}
-              className="text-sm text-gray-400 hover:text-indigo-300 transition"
-            >
-              ← Back to Projects
-            </button>
-            <h1 className={`text-4xl font-bold mt-2 ${titleGradient}`}>{project.title}</h1>
-            <p className="text-gray-400 mt-2 max-w-3xl">
-              {project.description || "No description provided."}
-            </p>
-
-            <div className="flex flex-wrap gap-2 mt-4">
-              {(project.resource_employee_ids || []).map((eid) => (
-                <span
-                  key={eid}
-                  className="text-xs px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200"
-                >
-                  {eid}
-                </span>
-              ))}
-              {(project.resource_employee_ids || []).length === 0 && (
-                <span className="text-sm text-gray-500">No resources assigned</span>
-              )}
-            </div>
-
-            <div className="mt-4 text-sm text-gray-400">
-              <span className="mr-6">Start: <span className="text-gray-200">{project.start_date}</span></span>
-              <span>Deadline: <span className="text-gray-200">{project.deadline}</span></span>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              onClick={() => {
-                fetchProject();
-                fetchTasks();
-              }}
-              className="bg-gray-900 border border-gray-800 hover:border-indigo-500/60 px-4 py-2 rounded-xl transition"
-            >
-              Refresh
-            </button>
-            <button
-              onClick={runSimulation}
-              className="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-xl transition"
-            >
-              Run Simulation
-            </button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="mt-6 bg-red-950/40 border border-red-900 text-red-200 px-4 py-3 rounded-xl">
-            <div className="font-semibold">Error</div>
-            <div className="text-sm mt-1">{error}</div>
-          </div>
-        )}
-
-        {info && (
-          <div className="mt-6 bg-emerald-950/30 border border-emerald-900 text-emerald-200 px-4 py-3 rounded-xl">
-            <div className="font-semibold">Success</div>
-            <div className="text-sm mt-1">{info}</div>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="flex mt-8 mb-8 space-x-8 border-b border-gray-800">
-          <button
-            onClick={() => setActiveTab("details")}
-            className={`pb-2 ${
-              activeTab === "details"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Details
-          </button>
-
-          <button
-            onClick={() => setActiveTab("tasks")}
-            className={`pb-2 ${
-              activeTab === "tasks"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Tasks (CPM/PERT)
-          </button>
-
-          <button
-            onClick={() => setActiveTab("simulator")}
-            className={`pb-2 ${
-              activeTab === "simulator"
-                ? "border-b-2 border-indigo-500 text-indigo-400"
-                : "text-gray-400"
-            }`}
-          >
-            Simulator Output
-          </button>
-        </div>
-
-        {activeTab === "details" && (
-          <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
-            <h2 className="text-lg font-semibold mb-2">Project Summary</h2>
-            <p className="text-gray-400">
-              Use the Tasks tab to model the project network. Run simulation to obtain critical path and schedule.
-            </p>
-          </div>
-        )}
-
-        {activeTab === "tasks" && (
-          <>
-            {/* Add Task */}
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <h2 className="text-lg font-semibold mb-4">Add Task</h2>
-
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-12 lg:col-span-4">
-                  <label className="text-xs text-gray-400">Task Name</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="e.g. Install new line"
-                    value={taskForm.name}
-                    onChange={(e) => setTaskForm((p) => ({ ...p, name: e.target.value }))}
-                  />
-                </div>
-
-                <div className="col-span-12 lg:col-span-2">
-                  <label className="text-xs text-gray-400">Duration (days)</label>
-                  <input
-                    type="number"
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="5"
-                    value={taskForm.duration_days}
-                    onChange={(e) =>
-                      setTaskForm((p) => ({ ...p, duration_days: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 lg:col-span-3">
-                  <label className="text-xs text-gray-400">Predecessors (task IDs CSV)</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="1, 2"
-                    value={taskForm.predecessorsCsv}
-                    onChange={(e) =>
-                      setTaskForm((p) => ({ ...p, predecessorsCsv: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12 lg:col-span-3">
-                  <label className="text-xs text-gray-400">Resources (employee_ids CSV)</label>
-                  <input
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                    placeholder="E100, E101"
-                    value={taskForm.resourcesCsv}
-                    onChange={(e) =>
-                      setTaskForm((p) => ({ ...p, resourcesCsv: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="col-span-12">
-                  <label className="text-xs text-gray-400">Description</label>
-                  <textarea
-                    className="mt-2 w-full bg-gray-800 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3 min-h-[80px]"
-                    placeholder="Optional"
-                    value={taskForm.description}
-                    onChange={(e) =>
-                      setTaskForm((p) => ({ ...p, description: e.target.value }))
-                    }
-                  />
-                </div>
-
-                {/* PERT section */}
-                <div className="col-span-12">
-                  <div className="bg-gray-800/40 border border-gray-700 rounded-2xl p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold text-gray-200">PERT (Optional)</div>
-                        <div className="text-xs text-gray-400 mt-1">
-                          Fill all three to use expected duration = (o + 4m + p) / 6.
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-12 gap-4 mt-4">
-                      <div className="col-span-12 md:col-span-4">
-                        <label className="text-xs text-gray-400">Optimistic</label>
-                        <input
-                          type="number"
-                          className="mt-2 w-full bg-gray-900 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                          placeholder="4"
-                          value={taskForm.optimistic}
-                          onChange={(e) =>
-                            setTaskForm((p) => ({ ...p, optimistic: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="col-span-12 md:col-span-4">
-                        <label className="text-xs text-gray-400">Most Likely</label>
-                        <input
-                          type="number"
-                          className="mt-2 w-full bg-gray-900 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                          placeholder="5"
-                          value={taskForm.most_likely}
-                          onChange={(e) =>
-                            setTaskForm((p) => ({ ...p, most_likely: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="col-span-12 md:col-span-4">
-                        <label className="text-xs text-gray-400">Pessimistic</label>
-                        <input
-                          type="number"
-                          className="mt-2 w-full bg-gray-900 border border-gray-700 focus:border-indigo-500/70 outline-none rounded-xl px-4 py-3"
-                          placeholder="7"
-                          value={taskForm.pessimistic}
-                          onChange={(e) =>
-                            setTaskForm((p) => ({ ...p, pessimistic: e.target.value }))
-                          }
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 flex gap-3">
-                <button
-                  onClick={createTask}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-6 py-2.5 rounded-xl transition"
-                >
-                  Add Task
-                </button>
-                <button
-                  onClick={() =>
-                    setTaskForm({
-                      name: "",
-                      description: "",
-                      duration_days: "",
-                      optimistic: "",
-                      most_likely: "",
-                      pessimistic: "",
-                      predecessorsCsv: "",
-                      resourcesCsv: "",
-                    })
-                  }
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-6 py-2.5 rounded-xl transition"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            {/* Tasks Table */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                  <tr>
-                    <th className="p-4">ID</th>
-                    <th className="p-4">Task</th>
-                    <th className="p-4">Duration</th>
-                    <th className="p-4">Preds</th>
-                    <th className="p-4">Resources</th>
-                    <th className="p-4">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasks.map((t) => (
-                    <tr
-                      key={t.id}
-                      className="border-t border-gray-800 hover:bg-gray-800/40 transition"
-                    >
-                      <td className="p-4 font-mono text-indigo-300">{t.id}</td>
-                      <td className="p-4">
-                        <div className="font-semibold">{t.name}</div>
-                        <div className="text-xs text-gray-400 mt-1">
-                          {t.description || "-"}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        {t.duration_days}d
-                        {t.optimistic != null && (
-                          <div className="text-xs text-gray-400 mt-1">
-                            PERT: ({t.optimistic}, {t.most_likely}, {t.pessimistic})
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-4 text-gray-300">
-                        {(t.predecessor_task_ids || []).join(", ") || "-"}
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-wrap gap-2">
-                          {(t.resource_employee_ids || []).map((eid) => (
-                            <span
-                              key={`${t.id}-${eid}`}
-                              className="text-xs px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200"
-                            >
-                              {eid}
-                            </span>
-                          ))}
-                          {(t.resource_employee_ids || []).length === 0 && (
-                            <span className="text-gray-500 text-sm">-</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <button
-                          onClick={() => deleteTask(t.id)}
-                          className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded-xl transition"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {tasks.length === 0 && (
-                    <tr>
-                      <td className="p-6 text-gray-500" colSpan={6}>
-                        No tasks created yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {activeTab === "simulator" && (
-          <>
-            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl mb-8">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-semibold">CPM/PERT Simulation</h2>
-                  <p className="text-sm text-gray-400 mt-1">
-                    Computes critical path, schedule (ES/EF/LS/LF/Float), and resource overlaps.
-                  </p>
-                </div>
-                <button
-                  onClick={runSimulation}
-                  className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2.5 rounded-xl transition"
-                >
-                  Run Simulation
-                </button>
-              </div>
-            </div>
-
-            {!simulation ? (
-              <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl text-gray-400">
-                Run simulation to see output.
-              </div>
-            ) : (
-              <>
-                {/* Summary cards */}
-                <div className="grid grid-cols-12 gap-4 mb-8">
-                  <Card
-                    title="Project Duration (days)"
-                    value={simulation.project_duration_days?.toFixed?.(2) ?? simulation.project_duration_days}
-                    accent="indigo"
-                  />
-                  <Card
-                    title="Deadline Slack (days)"
-                    value={simulation.deadline_days_remaining?.toFixed?.(2) ?? simulation.deadline_days_remaining}
-                    accent={simulation.deadline_days_remaining >= 0 ? "green" : "red"}
-                  />
-                  <Card
-                    title="Critical Path Task IDs"
-                    value={(simulation.critical_path_task_ids || []).join(" → ") || "-"}
-                    accent="purple"
-                    wide
-                  />
-                </div>
-
-                {/* Schedule table */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden mb-8">
-                  <div className="p-4 border-b border-gray-800">
-                    <h3 className="font-semibold">Schedule (CPM)</h3>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Critical tasks highlighted. Float ~ 0 indicates critical.
-                    </p>
-                  </div>
-
-                  <table className="w-full">
-                    <thead className="bg-gray-800 text-gray-400 text-xs uppercase">
-                      <tr>
-                        <th className="p-4">Task</th>
-                        <th className="p-4">Dur</th>
-                        <th className="p-4">ES</th>
-                        <th className="p-4">EF</th>
-                        <th className="p-4">LS</th>
-                        <th className="p-4">LF</th>
-                        <th className="p-4">Float</th>
-                        <th className="p-4">Planned</th>
-                        <th className="p-4">Resources</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(simulation.tasks || []).map((t) => {
-                        const isCritical = criticalSet.has(t.id);
-                        return (
-                          <tr
-                            key={t.id}
-                            className={`border-t border-gray-800 hover:bg-gray-800/40 transition ${
-                              isCritical ? "bg-indigo-500/10" : ""
-                            }`}
-                          >
-                            <td className="p-4">
-                              <div className="font-semibold">
-                                <span className="font-mono text-indigo-300 mr-2">{t.id}</span>
-                                {t.name}
-                              </div>
-                              <div className="text-xs text-gray-400 mt-1">
-                                Preds: {(t.predecessor_task_ids || []).join(", ") || "-"}
-                              </div>
-                            </td>
-                            <td className="p-4">{Number(t.expected_duration_days).toFixed(2)}</td>
-                            <td className="p-4">{Number(t.ES).toFixed(2)}</td>
-                            <td className="p-4">{Number(t.EF).toFixed(2)}</td>
-                            <td className="p-4">{Number(t.LS).toFixed(2)}</td>
-                            <td className="p-4">{Number(t.LF).toFixed(2)}</td>
-                            <td className="p-4">{Number(t.float).toFixed(2)}</td>
-                            <td className="p-4 text-sm text-gray-300">
-                              <div>{t.planned_start}</div>
-                              <div className="text-gray-500">→ {t.planned_end}</div>
-                            </td>
-                            <td className="p-4">
-                              <div className="flex flex-wrap gap-2">
-                                {(t.resource_employee_ids || []).map((eid) => (
-                                  <span
-                                    key={`${t.id}-${eid}`}
-                                    className="text-xs px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200"
-                                  >
-                                    {eid}
-                                  </span>
-                                ))}
-                                {(t.resource_employee_ids || []).length === 0 && (
-                                  <span className="text-gray-500 text-sm">-</span>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                      {(simulation.tasks || []).length === 0 && (
-                        <tr>
-                          <td className="p-6 text-gray-500" colSpan={9}>
-                            No schedule output.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Resource conflicts */}
-                <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
-                  <h3 className="font-semibold">Resource Conflicts</h3>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Overlaps indicate tasks scheduled at the same time using the same employee.
-                  </p>
-
-                  {Object.keys(simulation.resource_conflicts || {}).length === 0 ? (
-                    <div className="text-gray-400 mt-4">No resource conflicts detected.</div>
-                  ) : (
-                    <div className="mt-4 space-y-4">
-                      {Object.entries(simulation.resource_conflicts).map(([emp, conflicts]) => (
-                        <div
-                          key={emp}
-                          className="bg-gray-800/40 border border-gray-700 rounded-2xl p-4"
-                        >
-                          <div className="font-semibold text-indigo-200">Employee: {emp}</div>
-                          <div className="mt-3 space-y-2">
-                            {conflicts.map((c, idx) => (
-                              <div
-                                key={idx}
-                                className="flex flex-wrap items-center justify-between gap-2 text-sm"
-                              >
-                                <span className="text-gray-300">
-                                  Task {c.task_a} ↔ Task {c.task_b}
-                                </span>
-                                <span className="text-red-300">
-                                  Overlap: {Number(c.overlap_days).toFixed(2)} days
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Card({ title, value, accent = "indigo", wide = false }) {
-  const accentMap = {
-    indigo: "text-indigo-300",
-    purple: "text-purple-300",
-    green: "text-emerald-300",
-    red: "text-red-300",
-  };
+  const windowDays = Math.round((new Date(project.deadline) - new Date(project.start_date)) / 86400000);
+  const spare = simulation?.deadline_days_remaining;
 
   return (
-    <div
-      className={`bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-lg ${
-        wide ? "col-span-12 lg:col-span-6" : "col-span-12 md:col-span-6 lg:col-span-3"
-      }`}
+    <Page
+      title={project.title}
+      subtitle={`${project.start_date} → ${project.deadline} · ${windowDays} days available`}
+      actions={
+        <>
+          <Link to="/projects" className={buttonClass.secondary}>← All projects</Link>
+          {canWrite && !editingProject && (
+            <button className={buttonClass.primary} onClick={() => setEditingProject(true)}>Edit project</button>
+          )}
+        </>
+      }
     >
-      <div className="text-xs text-gray-400 uppercase tracking-wide">{title}</div>
-      <div className={`mt-3 text-2xl font-bold ${accentMap[accent] || "text-indigo-300"}`}>
-        {value}
+      <ErrorBanner message={error} onClose={() => setError("")} />
+
+      {editingProject ? (
+        <Panel title="Edit project" className="mb-8">
+          <ProjectForm project={project} employees={employees} onError={setError} onCancel={() => setEditingProject(false)}
+            onSaved={(p) => { setProject(p); setEditingProject(false); load(); }} />
+        </Panel>
+      ) : (
+        <Panel className="mb-8" title="About">
+          <p className="text-sm text-gray-300 whitespace-pre-wrap">{project.description || "No description."}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {project.resource_employee_ids.length === 0 && <span className="text-sm text-gray-500">No team assigned.</span>}
+            {project.resource_employee_ids.map((eid) => (
+              <span key={eid} className="text-xs px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-200">
+                {personName[eid] ? `${personName[eid]} (${eid})` : eid}
+              </span>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {simulation && simulation.tasks.length > 0 && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3 mb-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+              <div className="text-xs text-gray-400 uppercase">Expected duration</div>
+              <div className="mt-2 text-2xl font-bold text-indigo-300">
+                {number(simulation.project_duration_days, 1)} days
+                {simulation.project_std_dev_days > 0 && (
+                  <span className="text-sm text-gray-400 font-normal"> ± {number(simulation.project_std_dev_days, 1)}</span>
+                )}
+              </div>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+              <div className="text-xs text-gray-400 uppercase">{spare >= 0 ? "Days to spare" : "Days late"}</div>
+              <div className={`mt-2 text-2xl font-bold ${spare >= 0 ? "text-emerald-300" : "text-red-300"}`}>{number(Math.abs(spare), 1)}</div>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+              <div className="text-xs text-gray-400 uppercase">Critical path</div>
+              <div className="mt-2 text-sm text-gray-200">
+                {simulation.critical_path_task_ids.map((tid) => taskName[tid]).join(" → ")}
+              </div>
+            </div>
+          </div>
+
+          <Panel title="Timeline" subtitle="Earliest schedule from the task dependencies (CPM/PERT). Hover a bar for dates." className="mb-6">
+            <Gantt simulation={simulation} windowDays={windowDays} />
+          </Panel>
+
+          {Object.keys(simulation.resource_conflicts).length > 0 && (
+            <Panel title="People double-booked" className="mb-6"
+              subtitle="These people are on overlapping tasks in the schedule above.">
+              <ul className="text-sm space-y-1">
+                {Object.entries(simulation.resource_conflicts).map(([emp, list]) => (
+                  <li key={emp}>
+                    <span className="text-yellow-300">{personName[emp] || emp}</span>:{" "}
+                    {list.map((c) => `${taskName[c.task_a]} & ${taskName[c.task_b]} (${number(c.overlap_days, 1)} days)`).join("; ")}
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
+        </>
+      )}
+
+      {canWrite && (
+        <Panel className="mb-6" title={editingTask ? `Edit "${editingTask.name}"` : "Add task"}>
+          <TaskForm
+            key={editingTask ? `edit-${editingTask.id}` : `new-${taskFormKey}`}
+            projectId={projectId}
+            tasks={tasks}
+            employees={employees}
+            editing={editingTask}
+            onError={setError}
+            onCancel={editingTask ? () => setEditingTask(null) : null}
+            onSaved={() => { setEditingTask(null); setTaskFormKey((k) => k + 1); setError(""); load(); }}
+          />
+        </Panel>
+      )}
+
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-800 text-gray-400 text-xs uppercase text-left">
+            <tr><th className="p-3">Task</th><th className="p-3">Duration</th><th className="p-3">After</th><th className="p-3">People</th>{canWrite && <th className="p-3" />}</tr>
+          </thead>
+          <tbody>
+            {tasks.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-gray-500">No tasks yet.</td></tr>}
+            {tasks.map((t) => (
+              <tr key={t.id} className={`border-t border-gray-800 ${editingTask?.id === t.id ? "bg-indigo-500/10" : ""}`}>
+                <td className="p-3">
+                  {t.name}
+                  {simulation?.critical_path_task_ids.includes(t.id) && <span className="ml-2 text-xs text-red-300">critical</span>}
+                  {t.description && <div className="text-xs text-gray-500">{t.description}</div>}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {t.optimistic != null ? `${t.optimistic} / ${t.most_likely} / ${t.pessimistic} days` : `${t.duration_days} days`}
+                </td>
+                <td className="p-3 text-gray-400">{t.predecessor_task_ids.map((p) => taskName[p]).join(", ") || "—"}</td>
+                <td className="p-3 text-gray-400">{t.resource_employee_ids.map((e) => personName[e] || e).join(", ") || "—"}</td>
+                {canWrite && (
+                  <td className="p-3 whitespace-nowrap text-right space-x-2">
+                    <button className={buttonClass.small} onClick={() => { setEditingTask(t); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button>
+                    <button className={buttonClass.danger} onClick={() => deleteTask(t)}>Delete</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-    </div>
+    </Page>
   );
 }

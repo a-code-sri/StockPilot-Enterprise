@@ -35,3 +35,6 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Database backups (ops/backup.sh)
+backups/

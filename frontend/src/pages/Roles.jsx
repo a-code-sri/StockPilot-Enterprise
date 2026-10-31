@@ -135,6 +135,7 @@ function RolesTab({ modules, roles, reload, setError }) {
 function UsersTab({ roles, setError }) {
   const { user: me, refreshUser } = useAuth();
   const [users, setUsers] = useState([]);
+  const [resetLink, setResetLink] = useState(null); // {username, reset_url, expires_at, emailed}
 
   const load = useCallback(async () => {
     try {
@@ -168,7 +169,36 @@ function UsersTab({ roles, setError }) {
     }
   };
 
+  const createResetLink = async (u) => {
+    if (!window.confirm(`Create a one-time password reset link for ${u.username}?`)) return;
+    try {
+      const res = await api.post(`/rbac/users/${u.id}/reset-link`);
+      setResetLink({ username: u.username, ...res.data });
+    } catch (err) {
+      setError(errorMessage(err, "Could not create reset link"));
+    }
+  };
+
   return (
+    <>
+    {resetLink && (
+      <div role="status" className="mb-4 rounded-2xl border border-indigo-500/40 bg-indigo-500/10 p-4 text-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-medium">Reset link for {resetLink.username}</p>
+            <p className="text-gray-400 text-xs mt-1">
+              Works once, expires {new Date(resetLink.expires_at).toLocaleTimeString()}.
+              {resetLink.emailed ? " It was also emailed to them." : " Send it to them privately (e.g. chat), not in a public channel."}
+            </p>
+            <code className="block mt-2 break-all text-indigo-200">{resetLink.reset_url}</code>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button className={buttonClass.small} onClick={() => navigator.clipboard?.writeText(resetLink.reset_url)}>Copy</button>
+            <button className={buttonClass.small} onClick={() => setResetLink(null)}>Close</button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-800 text-gray-400 text-xs uppercase text-left">
@@ -205,12 +235,18 @@ function UsersTab({ roles, setError }) {
                   {u.is_active ? "Deactivate" : "Activate"}
                 </button>
                 {!u.is_active && <div className="text-xs text-red-300 mt-1">Deactivated</div>}
+                {u.is_active && u.id !== me.id && (
+                  <button className={`${buttonClass.small} mt-2 block`} onClick={() => createResetLink(u)}>
+                    Reset password
+                  </button>
+                )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
