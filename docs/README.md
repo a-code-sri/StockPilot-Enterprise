@@ -24,8 +24,8 @@ Start with the [root README](../README.md) for a quick start. The guides below g
 | Member | Roll no. | Responsibility | Main areas of the repo |
 |---|---|---|---|
 | Abiram Krishna | 24CSB1A02 | Frontend and client app | `frontend/`, `client_app/` |
-| Aditya Madhu | 24CSB1A03 | Backend and documentation | `backend/core/`, `backend/modules/`, `backend/workers/`, `tests/` |
-| Aditya Shrivastava | 24CSB1A04 | Database integration, system architecture, website and deployment | `backend/alembic/`, `backend/outbox/`, `backend/core/database/`, `docker-compose*.yml`, `ops/`, `.github/`, `docs/`, `website/` |
+| Aditya Madhu | 24CSB1A03 | Backend and documentation | `backend/core/`, `backend/modules/`, `backend/workers/`, `tests/`, `docs/` |
+| Aditya Shrivastava | 24CSB1A04 | Database integration, system architecture, website and deployment | `backend/alembic/`, `backend/outbox/`, `backend/core/database/`, `docker-compose*.yml`, `ops/`, `.github/`, `website/` |
 
 ## Technology at a glance
 

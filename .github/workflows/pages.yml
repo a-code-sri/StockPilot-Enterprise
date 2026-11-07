@@ -1,4 +1,9 @@
-# Publishes website/ to GitHub Pages. One-time setup: Settings → Pages → Source: GitHub Actions.
+# Optional: publishes website/ to GitHub Pages (the main host is Streamlit Community Cloud).
+# Off by default, because the deploy fails while Pages is not enabled on the repository.
+# To turn it on (repository admin):
+#   1. Settings → Pages → Source: GitHub Actions
+#   2. Settings → Secrets and variables → Actions → Variables → New variable: ENABLE_PAGES = true
+# Running the workflow by hand (Actions → Website → Run workflow) always deploys.
 name: Website
 
 on:
@@ -18,6 +23,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_PAGES == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

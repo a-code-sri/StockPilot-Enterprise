@@ -18,8 +18,8 @@ checked offline.
 | Member | Roll no. | Role |
 |---|---|---|
 | Abiram Krishna | 24CSB1A02 | Frontend and client app |
-| Aditya Madhu | 24CSB1A03 | Backend |
-| Aditya Shrivastava | 24CSB1A04 | Database integration, system architecture, documentation and deployment |
+| Aditya Madhu | 24CSB1A03 | Backend and documentation |
+| Aditya Shrivastava | 24CSB1A04 | Database integration, system architecture, website and deployment |
 
 ## Features
 
@@ -89,8 +89,10 @@ steps.
   public app from GitHub**. Pick this repository and branch `main`, and set **Main file path** to
   `website/streamlit_app.py`. The site redeploys whenever `website/` changes on `main`.
   - Preview it locally: `pip install streamlit`, then `streamlit run website/streamlit_app.py`.
-- **GitHub Pages:** in **Settings → Pages**, set Source to *GitHub Actions*. Then run the
-  *Website* workflow (`.github/workflows/pages.yml`).
+- **GitHub Pages (optional, off by default):** a repository admin sets **Settings → Pages →
+  Source** to *GitHub Actions*. Then add the Actions variable `ENABLE_PAGES = true` (**Settings →
+  Secrets and variables → Actions → Variables**). After that, the *Website* workflow
+  (`.github/workflows/pages.yml`) deploys on every push to `website/`.
 - **Locally:** open `website/index.html` directly.
 
 ## Local development (without Docker)
