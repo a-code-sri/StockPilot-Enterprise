@@ -1,27 +1,83 @@
+"""
+FreshBasket Fruits: a fruit shop's point-of-sale app built on StockPilot.
+
+A separate client business that only talks to the StockPilot REST API: it never
+touches PostgreSQL, the analytics outbox or WebSockets. Everything it does
+(sales, deliveries, restocking, spoilage, expenses) shows up live on the
+StockPilot dashboards, so it doubles as the end-to-end test client.
+
+    streamlit run client_app/app.py          # or: docker compose --profile simulator up -d
+"""
+
 from __future__ import annotations
 
-import json
 import os
 import random
 import string
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import requests
 import streamlit as st
 
-
-# ============================================================
-# Configuration
-# ============================================================
-
-st.set_page_config(
-    page_title="StockPilot Enterprise Simulator",
-    page_icon="🏢",
-    layout="wide",
-)
-
+SHOP_NAME = os.getenv("SHOP_NAME", "FreshBasket Fruits")
 DEFAULT_BACKEND_URL = os.getenv("STOCKPILOT_API_URL", "http://127.0.0.1:8000")
+DASHBOARD_URL = os.getenv("STOCKPILOT_WEB_URL", "http://localhost:8080")
+
+st.set_page_config(page_title=SHOP_NAME, page_icon="🍎", layout="wide")
+
+
+# ============================================================
+# Shop data
+# ============================================================
+
+# Starter catalogue: (inventory name, selling price per unit, opening stock, shelf life in days).
+# The unit is part of the name so the counter staff and the dashboards agree on it.
+STARTER_CATALOGUE = [
+    ("Shimla Apple (kg)", 180, 60, 21),
+    ("Banana (dozen)", 60, 80, 5),
+    ("Alphonso Mango (dozen)", 450, 25, 7),
+    ("Nagpur Orange (kg)", 120, 50, 14),
+    ("Green Grapes (kg)", 140, 40, 6),
+    ("Pomegranate (kg)", 220, 35, 20),
+    ("Papaya (kg)", 50, 30, 5),
+    ("Watermelon (kg)", 35, 70, 10),
+    ("Pineapple (piece)", 80, 25, 7),
+    ("Kiwi (piece)", 30, 90, 14),
+    ("Guava (kg)", 90, 30, 6),
+    ("Strawberry (box)", 250, 20, 4),
+]
+
+# Suppliers buy at roughly this share of the selling price.
+COST_RATIO = 0.65
+LOW_STOCK = 10
+
+SUPPLIERS = ["Azadpur Mandi Traders", "Green Valley Orchards", "Konkan Mango Co.", "Daily Fresh Wholesale"]
+CUSTOMERS = [
+    "Priya Sharma", "Rahul Verma", "Ananya Iyer", "Mohammed Khan", "Sneha Patil", "Arjun Reddy",
+    "Kavya Nair", "Vikram Singh", "Neha Gupta", "Rohan Das", "Fatima Shaikh", "Siddharth Rao",
+]
+PAYMENT_METHODS = ["Cash", "UPI", "Card"]
+EXPENSE_CATEGORIES = ["Rent", "Electricity", "Staff wages", "Transport", "Packaging", "Other"]
+
+# Delivery status → button label shown to shop staff.
+NEXT_STEP_LABELS = {
+    "packed": "📦 Packed",
+    "out_for_delivery": "🛵 Send out",
+    "delivered": "✅ Delivered & paid",
+    "failed": "⚠️ Delivery failed",
+    "pending": "↩️ Back to pending",
+    "cancelled": "✖ Cancel",
+}
+STATUS_LABELS = {
+    "pending": "🕒 New",
+    "packed": "📦 Packed",
+    "out_for_delivery": "🛵 Out for delivery",
+    "delivered": "✅ Delivered",
+    "failed": "⚠️ Failed",
+    "cancelled": "✖ Cancelled",
+}
 
 
 # ============================================================
@@ -32,13 +88,9 @@ DEFAULT_STATE = {
     "token": None,
     "user": None,
     "activity": [],
-    "last_response": None,
-    "selected_project_id": None,
-    "created_employee_ids": [],
-    "created_inventory_names": [],
-    "created_order_ids": [],
+    "bill_no": 0,  # part of the quantity widgets' keys: a new number gives a fresh, empty bill
+    "flash": None,
 }
-
 
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -46,1692 +98,589 @@ for key, value in DEFAULT_STATE.items():
 
 
 # ============================================================
-# Helpers
+# REST client
 # ============================================================
 
 def backend_url() -> str:
-    return st.session_state.get(
-        "backend_url",
-        DEFAULT_BACKEND_URL,
-    ).rstrip("/")
+    return st.session_state.get("backend_url", DEFAULT_BACKEND_URL).rstrip("/")
 
 
-def auth_headers() -> dict[str, str]:
-    token = st.session_state.get("token")
-
-    if not token:
-        return {}
-
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-
-def add_activity(
-    operation: str,
-    method: str,
-    endpoint: str,
-    status: int | str,
-    detail: Any = None,
-) -> None:
-    entry = {
-        "operation": operation,
-        "method": method,
-        "endpoint": endpoint,
-        "status": status,
-        "detail": detail,
-    }
-
-    st.session_state.activity.insert(0, entry)
-
-    # Keep the activity panel bounded.
-    st.session_state.activity = (
-        st.session_state.activity[:100]
-    )
-
-
-def api_request(
+def api(
     method: str,
     endpoint: str,
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
     operation: str = "API request",
-    timeout: int = 15,
 ) -> tuple[bool, Any]:
-    """
-    Central REST client.
-
-    The Streamlit application deliberately knows nothing about
-    PostgreSQL, analytics_outbox, pg_notify, or WebSockets.
-    """
-
-    url = f"{backend_url()}{endpoint}"
-
+    """Every call to StockPilot goes through here and is recorded in the API log tab."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"} if st.session_state.token else {}
     try:
         response = requests.request(
-            method=method,
-            url=url,
-            headers=auth_headers(),
-            json=json_body,
-            params=params,
-            timeout=timeout,
+            method, f"{backend_url()}{endpoint}", headers=headers, json=json_body, params=params, timeout=20
         )
-
         try:
             payload = response.json()
         except ValueError:
             payload = response.text
-
-        st.session_state.last_response = {
-            "status_code": response.status_code,
-            "method": method,
-            "endpoint": endpoint,
-            "payload": payload,
-        }
-
-        add_activity(
-            operation=operation,
-            method=method,
-            endpoint=endpoint,
-            status=response.status_code,
-            detail=payload,
-        )
-
-        if response.ok:
-            return True, payload
-
-        return False, payload
-
+        status: int | str = response.status_code
+        ok = response.ok
     except requests.RequestException as exc:
-        detail = f"{type(exc).__name__}: {exc}"
+        payload, status, ok = f"{type(exc).__name__}: {exc}", "ERROR", False
 
-        st.session_state.last_response = {
-            "status_code": "ERROR",
-            "method": method,
-            "endpoint": endpoint,
-            "payload": detail,
-        }
-
-        add_activity(
-            operation=operation,
-            method=method,
-            endpoint=endpoint,
-            status="ERROR",
-            detail=detail,
-        )
-
-        return False, detail
+    st.session_state.activity.insert(0, {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "operation": operation,
+        "method": method,
+        "endpoint": endpoint,
+        "status": status,
+        "detail": payload,
+    })
+    del st.session_state.activity[200:]
+    return ok, payload
 
 
-def show_result(
-    success: bool,
-    payload: Any,
-    success_message: str | None = None,
-) -> None:
-    if success:
-        if success_message:
-            st.success(success_message)
-
-        with st.expander("API response", expanded=False):
-            st.json(payload)
-
-    else:
-        st.error("API request failed")
-
-        with st.expander("Error response", expanded=True):
-            if isinstance(payload, (dict, list)):
-                st.json(payload)
-            else:
-                st.code(str(payload))
+def error_text(payload: Any) -> str:
+    if isinstance(payload, dict) and "detail" in payload:
+        detail = payload["detail"]
+        if isinstance(detail, list):  # FastAPI validation errors
+            return "; ".join(str(d.get("msg", d)) for d in detail)
+        return str(detail)
+    return str(payload)
 
 
-def random_suffix(length: int = 6) -> str:
-    chars = string.ascii_uppercase + string.digits
-    return "".join(random.choice(chars) for _ in range(length))
+def flash(kind: str, message: str) -> None:
+    """Show a message after the next rerun."""
+    st.session_state.flash = (kind, message)
 
 
-def make_inventory_name(prefix: str = "Enterprise Item") -> str:
-    return f"{prefix} {random_suffix()}"
+def rupees(amount: float) -> str:
+    return f"₹{amount:,.0f}" if float(amount).is_integer() else f"₹{amount:,.2f}"
 
 
-def inventory_path(name: str, suffix: str = "") -> str | None:
-    """
-    The API addresses inventory items by id. Resolve an item name (as typed or
-    remembered by this simulator) to `/inventory/{id}{suffix}`; None if not found.
-    """
-    ok, payload = api_request(
-        "GET",
-        "/inventory/",
-        params={"search": name, "limit": 50},
-        operation=f"Look up inventory '{name}'",
+def short_code(length: int = 4) -> str:
+    return "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(length))
+
+
+def new_order_id() -> str:
+    return f"FB-{date.today():%y%m%d}-{short_code()}"
+
+
+def fetch_stock() -> list[dict[str, Any]]:
+    ok, payload = api("GET", "/inventory/", params={"limit": 500}, operation="Load stock")
+    return sorted(payload, key=lambda i: i["name"]) if ok else []
+
+
+def days_left(item: dict[str, Any]) -> int | None:
+    if not item.get("expiry_date"):
+        return None
+    return (date.fromisoformat(item["expiry_date"]) - date.today()).days
+
+
+# ============================================================
+# Shop operations (each is a short sequence of REST calls)
+# ============================================================
+
+def move_stock(item: dict[str, Any], action: str, quantity: int, note: str) -> tuple[bool, Any]:
+    return api(
+        "PUT", f"/inventory/{item['id']}",
+        json_body={"quantity": quantity, "action": action, "note": note},
+        operation=f"Stock {action}: {item['name']}",
     )
-    if ok:
-        for item in payload:
-            if item.get("name") == name:
-                return f"/inventory/{item['id']}{suffix}"
-    st.error(f"Inventory item '{name}' was not found.")
-    return None
 
 
-def make_order_id() -> str:
-    return f"ACME-ORD-{random_suffix(8)}"
+def record_money(kind: str, amount: float, party: str, category: str, remarks: str) -> tuple[bool, Any]:
+    return api(
+        "POST", "/accounts/",
+        json_body={
+            "amount": round(amount, 2), "transaction_type": kind,
+            "source_target": party[:200], "category": category, "remarks": remarks[:1000],
+        },
+        operation=f"Record {kind}: {category}",
+    )
 
 
-def make_employee_id() -> str:
-    return f"EMP-{random_suffix(6)}"
+def set_order_status(order_id: str, status: str, remark: str) -> tuple[bool, Any]:
+    return api(
+        "PUT", f"/delivery/{order_id}/status",
+        json_body={"status": status, "remark": remark},
+        operation=f"Order {order_id} → {status}",
+    )
 
 
-def make_project_title() -> str:
-    return f"Enterprise Project {random_suffix(6)}"
+def order_total(order_id: str) -> float:
+    ok, items = api("GET", f"/delivery/{order_id}/items", operation=f"Order {order_id} items")
+    return sum(i["quantity"] * i["unit_price"] for i in items) if ok else 0.0
+
+
+def place_order(
+    customer: str, phone: str, lines: list[tuple[dict[str, Any], int]], home_delivery: bool, payment: str
+) -> tuple[bool, str]:
+    """
+    Create the order in StockPilot's delivery module with every line linked to its stock item.
+    Counter sales are completed at once (stock is deducted on dispatch) and paid immediately;
+    home deliveries stay open and are paid when delivered.
+    """
+    order_id = new_order_id()
+    customer_id = f"{customer} ({phone})" if phone else customer
+    ok, payload = api(
+        "POST", "/delivery/",
+        json_body={
+            "order_id": order_id,
+            "customer_id": customer_id[:80],
+            "items": [
+                {"product_name": item["name"], "quantity": qty, "unit_price": item["price"], "inventory_item_id": item["id"]}
+                for item, qty in lines
+            ],
+            "remarks": f"{'Home delivery' if home_delivery else 'Counter sale'}; payment: {payment}",
+        },
+        operation=f"Place order {order_id}",
+    )
+    if not ok:
+        return False, f"Could not place the order: {error_text(payload)}"
+    if home_delivery:
+        return True, f"Order **{order_id}** booked for home delivery ({payment} on delivery)."
+
+    for step in ("packed", "out_for_delivery", "delivered"):
+        ok, payload = set_order_status(order_id, step, "Counter sale")
+        if not ok:
+            set_order_status(order_id, "cancelled", "Counter sale could not be completed")
+            return False, f"Order {order_id} cancelled: {error_text(payload)}"
+
+    total = sum(item["price"] * qty for item, qty in lines)
+    record_money("credit", total, customer, "Fruit sales", f"Order {order_id}, paid by {payment}")
+    return True, f"Sale **{order_id}** completed: {rupees(total)} received by {payment}."
+
+
+def advance_order(order_id: str, customer: str, status: str) -> tuple[bool, str]:
+    ok, payload = set_order_status(order_id, status, f"{SHOP_NAME}: {status.replace('_', ' ')}")
+    if not ok:
+        return False, error_text(payload)
+    if status == "delivered":
+        total = order_total(order_id)
+        record_money("credit", total, customer, "Fruit sales", f"Order {order_id}, paid on delivery")
+        return True, f"{order_id} delivered; {rupees(total)} collected."
+    return True, f"{order_id}: {STATUS_LABELS[status]}"
+
+
+def restock(item: dict[str, Any], quantity: int, unit_cost: float, supplier: str) -> tuple[bool, str]:
+    ok, payload = move_stock(item, "add", quantity, f"Purchase from {supplier}")
+    if not ok:
+        return False, error_text(payload)
+    cost = quantity * unit_cost
+    record_money("debit", cost, supplier, "Fruit purchases", f"{quantity} × {item['name']} @ {rupees(unit_cost)}")
+    return True, f"Added {quantity} × {item['name']} from {supplier} ({rupees(cost)})."
+
+
+def load_starter_catalogue(existing: list[dict[str, Any]]) -> tuple[int, list[str]]:
+    have = {i["name"] for i in existing}
+    created, errors = 0, []
+    for name, price, qty, shelf_life in STARTER_CATALOGUE:
+        if name in have:
+            continue
+        ok, payload = api(
+            "POST", "/inventory/",
+            json_body={
+                "name": name, "quantity": qty, "price": price, "status": "under_use",
+                "expiry_date": (date.today() + timedelta(days=shelf_life)).isoformat(),
+            },
+            operation=f"Add {name} to catalogue",
+        )
+        if ok:
+            created += 1
+            record_money("debit", qty * price * COST_RATIO, random.choice(SUPPLIERS), "Fruit purchases",
+                         f"Opening stock: {qty} × {name}")
+        else:
+            errors.append(f"{name}: {error_text(payload)}")
+    return created, errors
 
 
 # ============================================================
-# Sidebar
+# Sidebar: connection and sign-in
 # ============================================================
 
-st.sidebar.title("🏢 StockPilot")
-st.sidebar.caption("Enterprise Client Simulator")
+st.sidebar.title(f"🍎 {SHOP_NAME}")
+st.sidebar.caption("Point of sale · powered by StockPilot")
 
-backend_input = st.sidebar.text_input(
-    "FastAPI Backend URL",
-    value=st.session_state.get(
-        "backend_url",
-        DEFAULT_BACKEND_URL,
-    ),
-)
-
-st.session_state.backend_url = backend_input.rstrip("/")
-
-st.sidebar.divider()
+with st.sidebar.expander("StockPilot connection", expanded=not st.session_state.token):
+    st.session_state.backend_url = st.text_input(
+        "API URL", value=backend_url(), help="The StockPilot API (FastAPI). In Docker: http://api:8000"
+    ).rstrip("/")
+    st.markdown(f"[Open the StockPilot dashboard ↗]({DASHBOARD_URL})")
 
 if st.session_state.token:
-    st.sidebar.success("Authenticated")
-
     user = st.session_state.user or {}
-
-    st.sidebar.write(
-        f"**User:** {user.get('username', 'unknown')}"
-    )
-
-    roles = user.get("roles", [])
-
-    if roles:
-        role_names = [
-            role.get("name", "")
-            if isinstance(role, dict)
-            else str(role)
-            for role in roles
-        ]
-
-        st.sidebar.write(
-            f"**Roles:** {', '.join(role_names)}"
-        )
-
-    if st.sidebar.button(
-        "Logout",
-        use_container_width=True,
-    ):
-        st.session_state.token = None
-        st.session_state.user = None
+    st.sidebar.success(f"Signed in as **{user.get('username', '?')}**")
+    if st.sidebar.button("Sign out", use_container_width=True):
+        st.session_state.token = st.session_state.user = None
+        st.session_state.bill_no += 1
         st.rerun()
 
-else:
-    st.sidebar.info("Not authenticated")
-
 
 # ============================================================
-# Header
-# ============================================================
-
-st.title("🏢 StockPilot Enterprise Simulator")
-
-st.markdown(
-    """
-This application acts as a **separate enterprise client**.
-
-It only communicates with the StockPilot backend through REST APIs.
-
-**REST → FastAPI → PostgreSQL → Analytics Worker → pg_notify →
-FastAPI WebSocket → React Analytics Dashboard**
-"""
-)
-
-st.caption(
-    f"Backend: `{backend_url()}`"
-)
-
-
-# ============================================================
-# Authentication
+# Sign-in screen
 # ============================================================
 
 if not st.session_state.token:
-
-    st.header("🔐 Enterprise Client Authentication")
-
-    login_tab, register_tab = st.tabs(
-        ["Login", "Register"]
+    st.title(f"🍎 {SHOP_NAME}")
+    st.write(
+        "Sign in with a **StockPilot account**. The shop needs the inventory, delivery and "
+        "accounts permissions (an admin can grant them on *Users & Roles* in StockPilot)."
     )
-
-    with login_tab:
-
-        with st.form("login_form"):
-            username = st.text_input(
-                "Username",
-                value="",
-            )
-
-            password = st.text_input(
-                "Password",
-                type="password",
-            )
-
-            login_clicked = st.form_submit_button(
-                "Login",
-                use_container_width=True,
-            )
-
-        if login_clicked:
-
-            success, payload = api_request(
-                "POST",
-                "/auth/login",
-                json_body={
-                    "username": username,
-                    "password": password,
-                },
-                operation="Enterprise login",
-            )
-
-            if success:
-
-                token = payload.get("access_token")
-
-                if not token:
-                    st.error(
-                        "Backend returned a successful response "
-                        "without an access token."
-                    )
-                else:
-                    st.session_state.token = token
-
-                    # Fetch current user using the actual backend
-                    # /auth/me endpoint.
-                    me_success, me_payload = api_request(
-                        "GET",
-                        "/auth/me",
-                        operation="Fetch authenticated enterprise user",
-                    )
-
-                    if me_success:
-                        st.session_state.user = me_payload
-
-                    st.success("Enterprise client authenticated.")
-
-                    st.rerun()
-
-            else:
-                show_result(False, payload)
-
-    with register_tab:
-
-        st.info(
-            "Register a dedicated simulator user if you do not "
-            "already have an account. New users have no role: an "
-            "admin must assign one on the web app's Users & Roles "
-            "page (or sign in here as the bootstrap admin)."
-        )
-
-        with st.form("register_form"):
-
-            register_email = st.text_input(
-                "Email",
-                value="enterprise.simulator@example.com",
-            )
-
-            register_username = st.text_input(
-                "Username",
-                value="enterprise_simulator",
-            )
-
-            register_password = st.text_input(
-                "Password",
-                type="password",
-                value="Enterprise123!",
-            )
-
-            register_clicked = st.form_submit_button(
-                "Register",
-                use_container_width=True,
-            )
-
-        if register_clicked:
-
-            success, payload = api_request(
-                "POST",
-                "/auth/register",
-                json_body={
-                    "email": register_email,
-                    "username": register_username,
-                    "password": register_password,
-                },
-                operation="Register enterprise simulator",
-            )
-
-            show_result(
-                success,
-                payload,
-                "Simulator user registered. You can now log in.",
-            )
-
+    with st.form("login"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.form_submit_button("Sign in", type="primary", use_container_width=True):
+            ok, payload = api("POST", "/auth/login", json_body={"username": username, "password": password},
+                              operation="Sign in")
+            if ok and payload.get("access_token"):
+                st.session_state.token = payload["access_token"]
+                me_ok, me = api("GET", "/auth/me", operation="Load signed-in user")
+                st.session_state.user = me if me_ok else {"username": username}
+                st.rerun()
+            st.error(f"Sign-in failed: {error_text(payload)}")
     st.stop()
 
 
-# ============================================================
-# Authenticated application
-# ============================================================
-
-tabs = st.tabs(
-    [
-        "📊 Test Control Center",
-        "📦 Inventory",
-        "💰 Accounts",
-        "🚚 Delivery",
-        "👥 Organization",
-        "📋 Projects",
-        "🔍 Read APIs",
-        "🧪 Activity Log",
-    ]
-)
-
-
-# ============================================================
-# TEST CONTROL CENTER
-# ============================================================
-
-with tabs[0]:
-
-    st.header("📊 Realtime Test Control Center")
-
-    st.markdown(
-        """
-Use this page to run a complete end-to-end realtime test.
-
-Keep the **React StockPilot Analytics dashboard open in another
-browser tab/window** while pressing these buttons.
-"""
+permissions = set((st.session_state.user or {}).get("permissions", []))
+missing = {"inventory.write", "delivery.write", "accounts.write"} - permissions
+if missing:
+    st.warning(
+        f"Your account is missing {', '.join(sorted(missing))}. Some shop actions will be refused; "
+        "ask a StockPilot admin to give you a role with these permissions."
     )
 
-    st.subheader("Recommended test sequence")
-
-    st.markdown(
-        """
-**1. Inventory**
-
-Create inventory → add stock → consume stock → change status.
-
-Watch the React Inventory Analytics page.
-
-**2. Accounts**
-
-Create credit → create debit.
-
-Watch the Accounts Analytics page.
-
-**3. Delivery**
-
-Create delivery → packed → out for delivery → delivered.
-
-Watch the Delivery Analytics page.
-
-**4. Organization**
-
-Create department → create employees.
-
-Watch Organization Analytics.
-
-**5. Projects**
-
-Create project → create tasks → simulate project.
-
-Watch Project Analytics if its projection is wired to realtime events.
-"""
-    )
-
-    st.divider()
-
-    st.subheader("⚡ One-click smoke test")
-
-    if st.button(
-        "Run Full Enterprise Activity Scenario",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        progress = st.progress(0)
-        status_box = st.empty()
-
-        # ----------------------------------------------------
-        # Inventory
-        # ----------------------------------------------------
-
-        status_box.write("📦 Creating inventory item...")
-
-        inventory_name = make_inventory_name()
-
-        success, payload = api_request(
-            "POST",
-            "/inventory/",
-            json_body={
-                "name": inventory_name,
-                "quantity": 100,
-                "on_order_quantity": 20,
-                "price": 1250.0,
-                "status": "under_use",
-                "expiry_date": (
-                    date.today() + timedelta(days=120)
-                ).isoformat(),
-            },
-            operation="Smoke test: create inventory",
-        )
-
-        if success:
-            st.session_state.created_inventory_names.append(
-                inventory_name
-            )
-
-        progress.progress(15)
-
-        # ----------------------------------------------------
-        # Inventory consume
-        # ----------------------------------------------------
-
-        status_box.write("📦 Consuming inventory...")
-
-        api_request(
-            "PUT",
-            inventory_path(inventory_name) or "/inventory/0",
-            json_body={
-                "quantity": 15,
-                "action": "consume",
-            },
-            operation="Smoke test: consume inventory",
-        )
-
-        progress.progress(25)
-
-        # ----------------------------------------------------
-        # Accounts
-        # ----------------------------------------------------
-
-        status_box.write("💰 Creating account transactions...")
-
-        api_request(
-            "POST",
-            "/accounts/",
-            json_body={
-                "amount": 25000,
-                "transaction_type": "credit",
-                "source_target": "Acme Enterprise Client",
-                "category": "Customer Payment",
-                "remarks": "Realtime smoke test credit",
-            },
-            operation="Smoke test: account credit",
-        )
-
-        api_request(
-            "POST",
-            "/accounts/",
-            json_body={
-                "amount": 8500,
-                "transaction_type": "debit",
-                "source_target": "Enterprise Supplier",
-                "category": "Inventory Purchase",
-                "remarks": "Realtime smoke test debit",
-            },
-            operation="Smoke test: account debit",
-        )
-
-        progress.progress(40)
-
-        # ----------------------------------------------------
-        # Organization
-        # ----------------------------------------------------
-
-        status_box.write("👥 Creating enterprise department...")
-
-        department_name = (
-            f"Realtime Operations {random_suffix(4)}"
-        )
-
-        success, payload = api_request(
-            "POST",
-            "/organization/departments",
-            json_body={
-                "name": department_name,
-            },
-            operation="Smoke test: create department",
-        )
-
-        progress.progress(55)
-
-        # ----------------------------------------------------
-        # Employee
-        # ----------------------------------------------------
-
-        status_box.write("👤 Creating enterprise employee...")
-
-        employee_id = make_employee_id()
-
-        success, payload = api_request(
-            "POST",
-            "/organization/employees",
-            json_body={
-                "employee_id": employee_id,
-                "name": "Realtime Test Employee",
-                "salary": 85000,
-                "job_role": "Operations Engineer",
-                "manager_employee_id": None,
-                "departments": [department_name],
-            },
-            operation="Smoke test: create employee",
-        )
-
-        if success:
-            st.session_state.created_employee_ids.append(
-                employee_id
-            )
-
-        progress.progress(65)
-
-        # ----------------------------------------------------
-        # Delivery
-        # ----------------------------------------------------
-
-        status_box.write("🚚 Creating delivery...")
-
-        order_id = make_order_id()
-
-        success, payload = api_request(
-            "POST",
-            "/delivery/",
-            json_body={
-                "order_id": order_id,
-                "customer_id": "ACME-CUSTOMER-001",
-                "items": [
-                    {
-                        "product_name": inventory_name,
-                        "quantity": 5,
-                        "unit_price": 1250.0,
-                    },
-                    {
-                        "product_name": "Enterprise Component",
-                        "quantity": 2,
-                        "unit_price": 2500.0,
-                    },
-                ],
-                "remarks": "Realtime enterprise smoke test",
-            },
-            operation="Smoke test: create delivery",
-        )
-
-        if success:
-            st.session_state.created_order_ids.append(
-                order_id
-            )
-
-        progress.progress(75)
-
-        # ----------------------------------------------------
-        # Delivery status transitions
-        # ----------------------------------------------------
-
-        status_box.write("🚚 Advancing delivery status...")
-
-        delivery_statuses = [
-            "packed",
-            "out_for_delivery",
-            "delivered",
-        ]
-
-        for delivery_status in delivery_statuses:
-
-            api_request(
-                "PUT",
-                f"/delivery/{order_id}/status",
-                json_body={
-                    "status": delivery_status,
-                    "remark": (
-                        f"Realtime smoke test: "
-                        f"{delivery_status}"
-                    ),
-                },
-                operation=(
-                    f"Smoke test: delivery → "
-                    f"{delivery_status}"
-                ),
-            )
-
-        progress.progress(90)
-
-        # ----------------------------------------------------
-        # Final inventory status
-        # ----------------------------------------------------
-
-        status_box.write(
-            "📦 Updating final inventory state..."
-        )
-
-        api_request(
-            "PUT",
-            inventory_path(inventory_name, "/status") or "/inventory/0/status",
-            json_body={
-                "status": "ordered",
-            },
-            operation="Smoke test: inventory status",
-        )
-
-        progress.progress(100)
-
-        status_box.success(
-            "Complete enterprise realtime scenario finished."
-        )
-
-        st.info(
-            """
-Now look at the React analytics dashboards.
-
-The Streamlit application itself never sends a WebSocket event.
-If the analytics dashboards changed automatically, the complete
-pipeline worked:
-
-REST → DB → outbox → worker → projection → pg_notify →
-FastAPI listener → WebSocket → React → REST refresh.
-"""
-        )
+if st.session_state.flash:
+    kind, message = st.session_state.flash
+    getattr(st, kind)(message)
+    st.session_state.flash = None
 
 
 # ============================================================
-# INVENTORY
+# Pages
 # ============================================================
 
-with tabs[1]:
+# Sidebar navigation rather than st.tabs: tabs jump back to the first one on every rerun.
+COUNTER, ORDERS, STOCK, CASH, RUSH, LOG = "🛒 Counter", "🛵 Orders", "🧺 Stock", "💰 Cash book", "⚡ Busy day", "🧪 API log"
+page = st.sidebar.radio("Go to", [COUNTER, ORDERS, STOCK, CASH, RUSH, LOG], key="page")
+st.title(page)
 
-    st.header("📦 Inventory Operations")
+stock = fetch_stock() if page in (COUNTER, STOCK, RUSH) else []
+on_shelf = [i for i in stock if i["quantity"] > 0]
 
-    create_col, update_col = st.columns(2)
 
-    with create_col:
+# ------------------------------------------------------------
+# Counter: sell from the shelf
+# ------------------------------------------------------------
 
-        st.subheader("Create Inventory")
+if page == COUNTER:
+    if not stock:
+        st.info("The shop has no products yet. Load the starter catalogue of 12 fruits to begin.")
+        if st.button("🍉 Load starter catalogue", type="primary"):
+            created, errors = load_starter_catalogue(stock)
+            flash("error" if errors else "success",
+                  f"Added {created} fruits." + ("".join(f"\n- {e}" for e in errors)))
+            st.rerun()
 
-        with st.form("create_inventory_form"):
+    elif not on_shelf:
+        st.warning("Everything is sold out. Restock on the **Stock** tab.")
 
-            name = st.text_input(
-                "Item name",
-                value=make_inventory_name(),
-            )
+    else:
+        shelf_col, cart_col = st.columns([3, 2], gap="large")
 
-            quantity = st.number_input(
-                "Initial quantity",
-                min_value=0,
-                value=100,
-                step=1,
-            )
+        with shelf_col:
+            st.subheader("On the shelf")
+            cards = st.columns(3)
+            lines = []
+            for index, item in enumerate(on_shelf):
+                left = days_left(item)
+                with cards[index % 3].container(border=True):
+                    st.markdown(f"**{item['name']}**")
+                    st.markdown(f"{rupees(item['price'])} · {item['quantity']} in stock")
+                    if left is not None and left <= 2:
+                        st.caption(f"🔴 expires {'today' if left <= 0 else f'in {left}d'}")
+                    elif item["quantity"] <= LOW_STOCK:
+                        st.caption("🟠 running low")
+                    else:
+                        st.caption("🟢 fresh")
+                    key = f"qty_{st.session_state.bill_no}_{item['id']}"
+                    if st.session_state.get(key, 0) > item["quantity"]:  # stock fell since it was typed
+                        st.session_state[key] = item["quantity"]
+                    qty = st.number_input("Qty", min_value=0, max_value=item["quantity"], key=key,
+                                          label_visibility="collapsed")
+                    if qty:
+                        lines.append((item, qty))
 
-            on_order = st.number_input(
-                "On-order quantity",
-                min_value=0,
-                value=20,
-                step=1,
-            )
-
-            price = st.number_input(
-                "Unit price",
-                min_value=0.0,
-                value=1000.0,
-                step=100.0,
-            )
-
-            status = st.selectbox(
-                "Status",
-                [
-                    "under_use",
-                    "ordered",
-                    "consumed",
-                ],
-            )
-
-            expiry = st.date_input(
-                "Expiry date",
-                value=date.today() + timedelta(days=90),
-            )
-
-            clicked = st.form_submit_button(
-                "Create inventory",
-                use_container_width=True,
-            )
-
-        if clicked:
-
-            success, payload = api_request(
-                "POST",
-                "/inventory/",
-                json_body={
-                    "name": name,
-                    "quantity": quantity,
-                    "on_order_quantity": on_order,
-                    "price": price,
-                    "status": status,
-                    "expiry_date": expiry.isoformat(),
-                },
-                operation="Create inventory",
-            )
-
-            if success:
-                st.session_state.created_inventory_names.append(
-                    name
+        with cart_col:
+            st.subheader("Bill")
+            if not lines:
+                st.caption("Set quantities on the left to add fruit to the bill.")
+            else:
+                st.dataframe(
+                    [{"Fruit": it["name"], "Qty": q, "Rate": rupees(it["price"]), "Amount": rupees(it["price"] * q)}
+                     for it, q in lines],
+                    hide_index=True, use_container_width=True,
                 )
+                st.metric("Total", rupees(sum(it["price"] * q for it, q in lines)))
 
-            show_result(
-                success,
-                payload,
-                "Inventory item created.",
+            with st.form("checkout", clear_on_submit=True):
+                customer = st.text_input("Customer name", value="Walk-in customer")
+                phone = st.text_input("Phone (optional)")
+                home_delivery = st.toggle("Home delivery")
+                payment = st.radio("Payment", PAYMENT_METHODS, horizontal=True)
+                submitted = st.form_submit_button("Place order", type="primary", use_container_width=True,
+                                                  disabled=not lines)
+            if submitted and lines:
+                ok, message = place_order(customer.strip() or "Walk-in customer", phone.strip(), lines,
+                                          home_delivery, payment)
+                if ok:
+                    st.session_state.bill_no += 1
+                flash("success" if ok else "error", message)
+                st.rerun()
+
+
+# ------------------------------------------------------------
+# Orders: home deliveries in progress
+# ------------------------------------------------------------
+
+if page == ORDERS:
+    ok, active = api("GET", "/delivery/active", params={"limit": 100}, operation="Load open orders")
+    active = active if ok else []
+    st.subheader(f"Open orders ({len(active)})")
+    if not active:
+        st.caption("No home deliveries in progress. Turn on *Home delivery* at the counter to book one.")
+    for order in active:
+        with st.container(border=True):
+            info_col, action_col = st.columns([3, 2])
+            with info_col:
+                st.markdown(f"**{order['order_id']}** · {order['customer_id']}")
+                st.caption(f"{STATUS_LABELS.get(order['status'], order['status'])} · "
+                           f"{order['items_count']} item(s) · booked {order['created_at'][:16].replace('T', ' ')}")
+            with action_col:
+                buttons = st.columns(max(len(order["allowed_next"]), 1))
+                for col, nxt in zip(buttons, order["allowed_next"]):
+                    if col.button(NEXT_STEP_LABELS.get(nxt, nxt), key=f"{order['order_id']}_{nxt}",
+                                  use_container_width=True):
+                        customer = order["customer_id"].split(" (")[0]
+                        done, message = advance_order(order["order_id"], customer, nxt)
+                        flash("success" if done else "error", message)
+                        st.rerun()
+
+    ok, finished = api("GET", "/delivery/finished", params={"limit": 20}, operation="Load finished orders")
+    if ok and finished:
+        st.subheader("Recently completed")
+        st.dataframe(
+            [{"Order": o["order_id"], "Customer": o["customer_id"], "Result": STATUS_LABELS.get(o["status"], o["status"]),
+              "Items": o["items_count"], "Finished": (o.get("completed_at") or "")[:16].replace("T", " ")}
+             for o in finished],
+            hide_index=True, use_container_width=True,
+        )
+
+
+# ------------------------------------------------------------
+# Stock: restock, spoilage, new products
+# ------------------------------------------------------------
+
+if page == STOCK:
+    if stock:
+        st.dataframe(
+            [{"Fruit": i["name"], "In stock": i["quantity"], "Price": rupees(i["price"]),
+              "Expires": i.get("expiry_date") or "—",
+              "Days left": days_left(i) if days_left(i) is not None else "—",
+              "Alert": ("Expired" if (days_left(i) or 1) <= 0 and i.get("expiry_date") else
+                        "Sold out" if i["quantity"] == 0 else "Low" if i["quantity"] <= LOW_STOCK else "")}
+             for i in stock],
+            hide_index=True, use_container_width=True,
+        )
+        names = {i["name"]: i for i in stock}
+        restock_col, waste_col = st.columns(2, gap="large")
+
+        with restock_col:
+            st.subheader("Receive from supplier")
+            # Not a form: the suggested cost has to follow the chosen fruit.
+            fruit = st.selectbox("Fruit", list(names), key="restock_fruit")
+            quantity = st.number_input("Quantity received", min_value=1, value=20, key="restock_qty")
+            unit_cost = st.number_input("Cost per unit (₹)", min_value=0.0, step=5.0, key=f"restock_cost_{fruit}",
+                                        value=float(round(names[fruit]["price"] * COST_RATIO)))
+            supplier = st.selectbox("Supplier", SUPPLIERS, key="restock_supplier")
+            if st.button("Add to stock", type="primary", use_container_width=True):
+                ok, message = restock(names[fruit], int(quantity), unit_cost, supplier)
+                flash("success" if ok else "error", message)
+                st.rerun()
+
+        with waste_col:
+            st.subheader("Write off spoilage")
+            with st.form("spoilage", clear_on_submit=True):
+                fruit = st.selectbox("Fruit", [n for n, i in names.items() if i["quantity"] > 0] or list(names))
+                quantity = st.number_input("Quantity spoiled", min_value=1, value=2)
+                reason = st.selectbox("Reason", ["Overripe", "Bruised", "Expired", "Damaged in transit"])
+                if st.form_submit_button("Write off", use_container_width=True):
+                    ok, payload = move_stock(names[fruit], "consume", int(quantity), f"Spoilage: {reason}")
+                    flash("success" if ok else "error",
+                          f"Wrote off {quantity} × {fruit}." if ok else error_text(payload))
+                    st.rerun()
+
+    st.subheader("Add a new fruit")
+    with st.form("new_fruit", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns(4)
+        name = c1.text_input("Name with unit", placeholder="Dragon Fruit (piece)")
+        price = c2.number_input("Selling price (₹)", min_value=0.0, value=100.0, step=5.0)
+        quantity = c3.number_input("Opening stock", min_value=0, value=20)
+        shelf_life = c4.number_input("Shelf life (days)", min_value=1, value=7)
+        if st.form_submit_button("Add fruit", use_container_width=True) and name.strip():
+            ok, payload = api(
+                "POST", "/inventory/",
+                json_body={"name": name.strip(), "quantity": int(quantity), "price": price, "status": "under_use",
+                           "expiry_date": (date.today() + timedelta(days=int(shelf_life))).isoformat()},
+                operation=f"Add {name.strip()} to catalogue",
             )
-
-    with update_col:
-
-        st.subheader("Modify Inventory")
-
-        existing_name = st.text_input(
-            "Inventory name",
-            value=(
-                st.session_state.created_inventory_names[-1]
-                if st.session_state.created_inventory_names
-                else ""
-            ),
-        )
-
-        inventory_action = st.selectbox(
-            "Action",
-            [
-                "add",
-                "consume",
-                "deliver",
-                "order",
-                "return",
-            ],
-        )
-
-        inventory_quantity = st.number_input(
-            "Quantity",
-            min_value=1,
-            value=10,
-            step=1,
-        )
-
-        if st.button(
-            "Execute inventory action",
-            use_container_width=True,
-        ):
-
-            path = inventory_path(existing_name)
-            success, payload = (False, "Not found") if not path else api_request(
-                "PUT",
-                path,
-                json_body={
-                    "quantity": inventory_quantity,
-                    "action": inventory_action,
-                },
-                operation=(
-                    f"Inventory {inventory_action}"
-                ),
-            )
-
-            show_result(
-                success,
-                payload,
-                f"Inventory {inventory_action} operation completed.",
-            )
-
-        new_status = st.selectbox(
-            "New status",
-            [
-                "under_use",
-                "ordered",
-                "consumed",
-            ],
-            key="inventory_status_select",
-        )
-
-        if st.button(
-            "Change inventory status",
-            use_container_width=True,
-        ):
-
-            path = inventory_path(existing_name, "/status")
-            success, payload = (False, "Not found") if not path else api_request(
-                "PUT",
-                path,
-                json_body={
-                    "status": new_status,
-                },
-                operation="Inventory status update",
-            )
-
-            show_result(
-                success,
-                payload,
-                "Inventory status updated.",
-            )
-
-        if st.button(
-            "Delete inventory item",
-            use_container_width=True,
-        ):
-
-            path = inventory_path(existing_name)
-            success, payload = (False, "Not found") if not path else api_request(
-                "DELETE",
-                path,
-                operation="Delete inventory",
-            )
-
-            show_result(
-                success,
-                payload,
-                "Inventory item deleted.",
-            )
-
-
-# ============================================================
-# ACCOUNTS
-# ============================================================
-
-with tabs[2]:
-
-    st.header("💰 Accounts Operations")
-
-    transaction_type = st.radio(
-        "Transaction type",
-        ["credit", "debit"],
-        horizontal=True,
-    )
-
-    with st.form("account_transaction_form"):
-
-        amount = st.number_input(
-            "Amount",
-            min_value=0.01,
-            value=10000.0,
-            step=500.0,
-        )
-
-        source_target = st.text_input(
-            "Source / Target",
-            value="Acme Enterprise",
-        )
-
-        category = st.text_input(
-            "Category",
-            value=(
-                "Customer Payment"
-                if transaction_type == "credit"
-                else "Supplier Payment"
-            ),
-        )
-
-        remarks = st.text_area(
-            "Remarks",
-            value="Enterprise realtime test transaction",
-        )
-
-        clicked = st.form_submit_button(
-            "Create transaction",
-            use_container_width=True,
-        )
-
-    if clicked:
-
-        success, payload = api_request(
-            "POST",
-            "/accounts/",
-            json_body={
-                "amount": amount,
-                "transaction_type": transaction_type,
-                "source_target": source_target,
-                "category": category,
-                "remarks": remarks,
-            },
-            operation=(
-                f"Create account {transaction_type}"
-            ),
-        )
-
-        show_result(
-            success,
-            payload,
-            "Account transaction created.",
-        )
-
-
-# ============================================================
-# DELIVERY
-# ============================================================
-
-with tabs[3]:
-
-    st.header("🚚 Delivery Operations")
-
-    st.subheader("Create Delivery")
-
-    with st.form("create_delivery_form"):
-
-        order_id = st.text_input(
-            "Order ID",
-            value=make_order_id(),
-        )
-
-        customer_id = st.text_input(
-            "Customer ID",
-            value="ACME-CUSTOMER-001",
-        )
-
-        remarks = st.text_area(
-            "Remarks",
-            value="Enterprise simulator delivery",
-        )
-
-        item_1, item_2 = st.columns(2)
-
-        with item_1:
-
-            product_1 = st.text_input(
-                "Product 1",
-                value="Industrial Component",
-            )
-
-            quantity_1 = st.number_input(
-                "Quantity 1",
-                min_value=1,
-                value=5,
-                step=1,
-            )
-
-            price_1 = st.number_input(
-                "Unit price 1",
-                min_value=0.0,
-                value=1500.0,
-                step=100.0,
-            )
-
-        with item_2:
-
-            product_2 = st.text_input(
-                "Product 2",
-                value="Replacement Part",
-            )
-
-            quantity_2 = st.number_input(
-                "Quantity 2",
-                min_value=1,
-                value=2,
-                step=1,
-            )
-
-            price_2 = st.number_input(
-                "Unit price 2",
-                min_value=0.0,
-                value=2500.0,
-                step=100.0,
-            )
-
-        clicked = st.form_submit_button(
-            "Create delivery",
-            use_container_width=True,
-        )
-
-    if clicked:
-
-        success, payload = api_request(
-            "POST",
-            "/delivery/",
-            json_body={
-                "order_id": order_id,
-                "customer_id": customer_id,
-                "items": [
-                    {
-                        "product_name": product_1,
-                        "quantity": quantity_1,
-                        "unit_price": price_1,
-                    },
-                    {
-                        "product_name": product_2,
-                        "quantity": quantity_2,
-                        "unit_price": price_2,
-                    },
-                ],
-                "remarks": remarks,
-            },
-            operation="Create delivery",
-        )
-
-        if success:
-            st.session_state.created_order_ids.append(
-                order_id
-            )
-
-        show_result(
-            success,
-            payload,
-            f"Delivery {order_id} created.",
-        )
-
-    st.divider()
-
-    st.subheader("Update Delivery Status")
-
-    selected_order = st.text_input(
-        "Order ID",
-        value=(
-            st.session_state.created_order_ids[-1]
-            if st.session_state.created_order_ids
-            else ""
-        ),
-        key="delivery_update_order",
-    )
-
-    status = st.selectbox(
-        "Status",
-        [
-            "pending",
-            "packed",
-            "out_for_delivery",
-            "delivered",
-            "failed",
-            "cancelled",
-        ],
-    )
-
-    remark = st.text_input(
-        "Status remark",
-        value="Updated by enterprise simulator",
-    )
-
-    if st.button(
-        "Update delivery status",
-        use_container_width=True,
-    ):
-
-        success, payload = api_request(
-            "PUT",
-            f"/delivery/{selected_order}/status",
-            json_body={
-                "status": status,
-                "remark": remark,
-            },
-            operation=(
-                f"Delivery status → {status}"
-            ),
-        )
-
-        show_result(
-            success,
-            payload,
-            f"Delivery status changed to {status}.",
-        )
-
-
-# ============================================================
-# ORGANIZATION
-# ============================================================
-
-with tabs[4]:
-
-    st.header("👥 Organization Operations")
-
-    department_col, employee_col = st.columns(2)
-
-    with department_col:
-
-        st.subheader("Create Department")
-
-        department_name = st.text_input(
-            "Department name",
-            value=f"Operations {random_suffix(4)}",
-            key="department_name",
-        )
-
-        if st.button(
-            "Create department",
-            use_container_width=True,
-        ):
-
-            success, payload = api_request(
-                "POST",
-                "/organization/departments",
-                json_body={
-                    "name": department_name,
-                },
-                operation="Create department",
-            )
-
-            show_result(
-                success,
-                payload,
-                "Department created.",
-            )
-
-    with employee_col:
-
-        st.subheader("Create Employee")
-
-        employee_id = st.text_input(
-            "Employee ID",
-            value=make_employee_id(),
-            key="employee_id",
-        )
-
-        employee_name = st.text_input(
-            "Employee name",
-            value="Enterprise Test Employee",
-        )
-
-        salary = st.number_input(
-            "Salary",
-            min_value=0.0,
-            value=75000.0,
-            step=5000.0,
-        )
-
-        job_role = st.text_input(
-            "Job role",
-            value="Operations Engineer",
-        )
-
-        employee_department = st.text_input(
-            "Department name",
-            value=department_name,
-        )
-
-        manager_employee_id = st.text_input(
-            "Manager employee ID (optional)",
-            value="",
-        )
-
-        if st.button(
-            "Create employee",
-            use_container_width=True,
-        ):
-
-            departments = [
-                employee_department
-            ] if employee_department.strip() else []
-
-            success, payload = api_request(
-                "POST",
-                "/organization/employees",
-                json_body={
-                    "employee_id": employee_id,
-                    "name": employee_name,
-                    "salary": salary,
-                    "job_role": job_role,
-                    "manager_employee_id": (
-                        manager_employee_id.strip()
-                        or None
-                    ),
-                    "departments": departments,
-                },
-                operation="Create employee",
-            )
-
-            if success:
-                st.session_state.created_employee_ids.append(
-                    employee_id
-                )
-
-            show_result(
-                success,
-                payload,
-                "Employee created.",
-            )
-
-    st.divider()
-
-    st.subheader("Delete Employee")
-
-    delete_employee_id = st.text_input(
-        "Employee ID to delete",
-        value=(
-            st.session_state.created_employee_ids[-1]
-            if st.session_state.created_employee_ids
-            else ""
-        ),
-    )
-
-    if st.button(
-        "Delete employee",
-        use_container_width=True,
-    ):
-
-        success, payload = api_request(
-            "DELETE",
-            f"/organization/employees/{delete_employee_id}",
-            operation="Delete employee",
-        )
-
-        show_result(
-            success,
-            payload,
-            "Employee deleted.",
-        )
-
-
-# ============================================================
-# PROJECTS
-# ============================================================
-
-with tabs[5]:
-
-    st.header("📋 Project Operations")
-
-    st.subheader("Create Project")
-
-    with st.form("create_project_form"):
-
-        project_title = st.text_input(
-            "Project title",
-            value=make_project_title(),
-        )
-
-        project_description = st.text_area(
-            "Description",
-            value="Enterprise realtime analytics test project",
-        )
-
-        start_date = st.date_input(
-            "Start date",
-            value=date.today(),
-        )
-
-        deadline = st.date_input(
-            "Deadline",
-            value=date.today() + timedelta(days=30),
-        )
-
-        resource_ids = st.text_input(
-            "Resource employee IDs",
-            value="",
-            help="Comma-separated employee IDs.",
-        )
-
-        clicked = st.form_submit_button(
-            "Create project",
-            use_container_width=True,
-        )
-
-    if clicked:
-
-        resources = [
-            item.strip()
-            for item in resource_ids.split(",")
-            if item.strip()
-        ]
-
-        success, payload = api_request(
-            "POST",
-            "/projects/",
-            json_body={
-                "title": project_title,
-                "description": project_description,
-                "start_date": start_date.isoformat(),
-                "deadline": deadline.isoformat(),
-                "resource_employee_ids": resources,
-            },
-            operation="Create project",
-        )
-
-        if success and isinstance(payload, dict):
-            st.session_state.selected_project_id = payload.get(
-                "id"
-            )
-
-        show_result(
-            success,
-            payload,
-            "Project created.",
-        )
-
-    st.divider()
-
-    st.subheader("Create Task")
-
-    project_id_input = st.number_input(
-        "Project ID",
-        min_value=1,
-        value=(
-            st.session_state.selected_project_id or 1
-        ),
-        step=1,
-    )
-
-    with st.form("create_task_form"):
-
-        task_name = st.text_input(
-            "Task name",
-            value=f"Realtime Task {random_suffix(4)}",
-        )
-
-        task_description = st.text_area(
-            "Task description",
-            value="Task generated by enterprise simulator",
-        )
-
-        duration_days = st.number_input(
-            "Duration days",
-            min_value=0.1,
-            value=5.0,
-            step=0.5,
-        )
-
-        optimistic = st.number_input(
-            "Optimistic duration",
-            min_value=0.1,
-            value=3.0,
-            step=0.5,
-        )
-
-        most_likely = st.number_input(
-            "Most likely duration",
-            min_value=0.1,
-            value=5.0,
-            step=0.5,
-        )
-
-        pessimistic = st.number_input(
-            "Pessimistic duration",
-            min_value=0.1,
-            value=8.0,
-            step=0.5,
-        )
-
-        predecessor_ids = st.text_input(
-            "Predecessor task IDs",
-            value="",
-            help="Comma-separated task IDs.",
-        )
-
-        task_resources = st.text_input(
-            "Resource employee IDs",
-            value="",
-            help="Comma-separated employee IDs.",
-        )
-
-        clicked = st.form_submit_button(
-            "Create task",
-            use_container_width=True,
-        )
-
-    if clicked:
-
-        predecessors = []
-
-        for item in predecessor_ids.split(","):
-            item = item.strip()
-
-            if item:
-                try:
-                    predecessors.append(int(item))
-                except ValueError:
-                    pass
-
-        resources = [
-            item.strip()
-            for item in task_resources.split(",")
-            if item.strip()
-        ]
-
-        success, payload = api_request(
-            "POST",
-            f"/projects/{int(project_id_input)}/tasks",
-            json_body={
-                "name": task_name,
-                "description": task_description,
-                "duration_days": duration_days,
-                "optimistic": optimistic,
-                "most_likely": most_likely,
-                "pessimistic": pessimistic,
-                "predecessor_task_ids": predecessors,
-                "resource_employee_ids": resources,
-            },
-            operation="Create project task",
-        )
-
-        show_result(
-            success,
-            payload,
-            "Project task created.",
-        )
-
-    st.divider()
-
-    st.subheader("Project Simulation")
-
-    if st.button(
-        "Run Project Simulation",
-        use_container_width=True,
-    ):
-
-        success, payload = api_request(
-            "POST",
-            f"/projects/{int(project_id_input)}/simulate",
-            operation="Run project simulation",
-        )
-
-        show_result(
-            success,
-            payload,
-            "Project simulation completed.",
-        )
-
-    st.divider()
-
-    st.subheader("Delete Project")
-
-    if st.button(
-        "Delete selected project",
-        use_container_width=True,
-    ):
-
-        success, payload = api_request(
-            "DELETE",
-            f"/projects/{int(project_id_input)}",
-            operation="Delete project",
-        )
-
-        show_result(
-            success,
-            payload,
-            "Project deleted.",
-        )
-
-
-# ============================================================
-# READ APIs
-# ============================================================
-
-with tabs[6]:
-
-    st.header("🔍 Read / Verification APIs")
-
-    st.caption(
-        "These operations are useful for confirming that the "
-        "backend state changed independently of the realtime path."
-    )
-
-    read_module = st.selectbox(
-        "Module",
-        [
-            "Inventory",
-            "Accounts",
-            "Delivery Active",
-            "Delivery Finished",
-            "Organization Departments",
-            "Organization Employees",
-            "Projects",
-        ],
-    )
-
-    if st.button(
-        "Fetch current data",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        if read_module == "Inventory":
-
-            success, payload = api_request(
-                "GET",
-                "/inventory/",
-                operation="Read inventory",
-            )
-
-        elif read_module == "Accounts":
-
-            success, payload = api_request(
-                "GET",
-                "/accounts/",
-                operation="Read accounts",
-            )
-
-        elif read_module == "Delivery Active":
-
-            success, payload = api_request(
-                "GET",
-                "/delivery/active",
-                operation="Read active deliveries",
-            )
-
-        elif read_module == "Delivery Finished":
-
-            success, payload = api_request(
-                "GET",
-                "/delivery/finished",
-                operation="Read finished deliveries",
-            )
-
-        elif read_module == "Organization Departments":
-
-            success, payload = api_request(
-                "GET",
-                "/organization/departments",
-                operation="Read departments",
-            )
-
-        elif read_module == "Organization Employees":
-
-            success, payload = api_request(
-                "GET",
-                "/organization/employees",
-                operation="Read employees",
-            )
-
-        else:
-
-            success, payload = api_request(
-                "GET",
-                "/projects/",
-                operation="Read projects",
-            )
-
-        show_result(
-            success,
-            payload,
-        )
-
-
-# ============================================================
-# ACTIVITY LOG
-# ============================================================
-
-with tabs[7]:
-
-    st.header("🧪 Enterprise Client Activity")
-
-    st.caption(
-        "Every operation performed by this client is recorded "
-        "here. This is useful while debugging the realtime flow."
-    )
-
-    if st.button(
-        "Clear activity log",
-        use_container_width=True,
-    ):
-        st.session_state.activity = []
+            flash("success" if ok else "error", f"Added {name.strip()}." if ok else error_text(payload))
+            st.rerun()
+
+    if stock and len(stock) < len(STARTER_CATALOGUE) and st.button("🍉 Add missing starter fruits"):
+        created, errors = load_starter_catalogue(stock)
+        flash("error" if errors else "success", f"Added {created} fruits." + "".join(f"\n- {e}" for e in errors))
         st.rerun()
 
-    if not st.session_state.activity:
 
-        st.info("No API operations performed yet.")
+# ------------------------------------------------------------
+# Cash book: money in and out
+# ------------------------------------------------------------
 
-    else:
+if page == CASH:
+    ok, summary = api("GET", "/accounts/summary", operation="Load cash summary")
+    if ok:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Balance", rupees(summary["current_balance"]))
+        m2.metric("Money in", rupees(summary["total_credit"]))
+        m3.metric("Money out", rupees(summary["total_debit"]))
+        m4.metric("Last 30 days", rupees(summary["last_30_days_net"]))
 
-        for index, entry in enumerate(
-            st.session_state.activity
-        ):
+    book_col, expense_col = st.columns([3, 2], gap="large")
+    with book_col:
+        st.subheader("Recent entries")
+        ok, entries = api("GET", "/accounts/", params={"limit": 25}, operation="Load cash book")
+        if ok and entries:
+            st.dataframe(
+                [{"When": e["date"][:16].replace("T", " "), "In / Out": "In" if e["transaction_type"] == "credit" else "Out",
+                  "Amount": rupees(e["amount"]), "Party": e["source_target"], "Category": e["category"],
+                  "Note": e.get("remarks") or ""}
+                 for e in entries],
+                hide_index=True, use_container_width=True,
+            )
+        else:
+            st.caption("No entries yet.")
+    with expense_col:
+        st.subheader("Pay an expense")
+        with st.form("expense", clear_on_submit=True):
+            category = st.selectbox("Category", EXPENSE_CATEGORIES)
+            amount = st.number_input("Amount (₹)", min_value=1.0, value=500.0, step=50.0)
+            paid_to = st.text_input("Paid to", value="")
+            note = st.text_input("Note", value="")
+            if st.form_submit_button("Record expense", type="primary", use_container_width=True):
+                ok, payload = record_money("debit", amount, paid_to or category, category, note or category)
+                flash("success" if ok else "error",
+                      f"Recorded {rupees(amount)} for {category}." if ok else error_text(payload))
+                st.rerun()
 
-            status = entry["status"]
 
-            if isinstance(status, int) and 200 <= status < 300:
-                icon = "🟢"
-            else:
-                icon = "🔴"
+# ------------------------------------------------------------
+# Busy day: generate realistic shop traffic
+# ------------------------------------------------------------
 
-            with st.expander(
-                f"{icon} "
-                f"{entry['method']} "
-                f"{entry['endpoint']} "
-                f"→ {status}",
-                expanded=False,
-            ):
+if page == RUSH:
+    st.markdown(
+        "Simulate a stretch of trading: customers buy at the counter and order home deliveries, riders "
+        "deliver (some fail), the shop restocks what runs low and writes off spoiled fruit. "
+        f"Keep the [StockPilot dashboard]({DASHBOARD_URL}) open to watch it update live."
+    )
+    c1, c2, c3 = st.columns(3)
+    customers = c1.slider("Customers", 5, 100, 20)
+    delivery_share = c2.slider("Home delivery share", 0.0, 1.0, 0.3)
+    pause = c3.slider("Pause between customers (s)", 0.0, 3.0, 0.5)
 
-                st.write(
-                    f"**Operation:** "
-                    f"{entry['operation']}"
-                )
+    if st.button("Open the shop", type="primary", disabled=not on_shelf):
+        progress = st.progress(0.0)
+        log = st.container(height=320)
+        tally = {"sales": 0, "orders": 0, "delivered": 0, "failed": 0, "restocks": 0, "spoilage": 0, "errors": 0}
+        open_orders: list[tuple[str, str]] = []
 
-                detail = entry.get("detail")
+        for n in range(customers):
+            shelf = [i for i in fetch_stock() if i["quantity"] > 0]
+            customer = random.choice(CUSTOMERS)
 
-                if isinstance(
-                    detail,
-                    (dict, list),
-                ):
-                    st.json(detail)
+            if shelf:
+                picks = random.sample(shelf, k=min(len(shelf), random.randint(1, 3)))
+                lines = [(i, random.randint(1, max(1, min(5, i["quantity"] // 2)))) for i in picks]
+                home = random.random() < delivery_share
+                ok, message = place_order(customer, f"98{random.randint(10000000, 99999999)}", lines, home,
+                                          random.choice(PAYMENT_METHODS))
+                log.write(("✅ " if ok else "❌ ") + message)
+                if ok and home:
+                    tally["orders"] += 1
+                    open_orders.append((message.split("**")[1], customer))
+                elif ok:
+                    tally["sales"] += 1
                 else:
-                    st.code(str(detail))
+                    tally["errors"] += 1
 
+            # Riders move earlier orders along.
+            if open_orders and random.random() < 0.5:
+                order_id, who = open_orders.pop(0)
+                for step in ("packed", "out_for_delivery"):
+                    advance_order(order_id, who, step)
+                outcome = "failed" if random.random() < 0.1 else "delivered"
+                ok, message = advance_order(order_id, who, outcome)
+                tally[outcome] += ok
+                log.write(("🛵 " if outcome == "delivered" else "⚠️ ") + message)
 
-# ============================================================
-# Last API response
-# ============================================================
+            # Restock anything running low, now and then.
+            if random.random() < 0.25:
+                low = [i for i in fetch_stock() if i["quantity"] <= LOW_STOCK]
+                if low:
+                    item = random.choice(low)
+                    ok, message = restock(item, random.randint(20, 40), round(item["price"] * COST_RATIO),
+                                          random.choice(SUPPLIERS))
+                    tally["restocks"] += ok
+                    log.write("🚚 " + message)
 
-st.divider()
+            # A little fruit always spoils.
+            if shelf and random.random() < 0.1:
+                item = random.choice(shelf)
+                if move_stock(item, "consume", 1, "Spoilage: overripe")[0]:
+                    tally["spoilage"] += 1
+                    log.write(f"🗑️ Wrote off 1 × {item['name']}")
 
-with st.expander(
-    "Last API response",
-    expanded=False,
-):
+            progress.progress((n + 1) / customers, text=f"Customer {n + 1} of {customers}")
+            time.sleep(pause)
 
-    if st.session_state.last_response:
-
-        st.json(
-            st.session_state.last_response
+        # Close the day: deliver whatever is still open.
+        for order_id, who in open_orders:
+            for step in ("packed", "out_for_delivery", "delivered"):
+                ok, message = advance_order(order_id, who, step)
+            tally["delivered"] += ok
+        st.success(
+            f"Day closed: {tally['sales']} counter sales, {tally['orders']} home orders "
+            f"({tally['delivered']} delivered, {tally['failed']} failed), {tally['restocks']} restocks, "
+            f"{tally['spoilage']} write-offs, {tally['errors']} errors."
         )
 
-    else:
 
-        st.info(
-            "No API request has been performed yet."
-        )
+# ------------------------------------------------------------
+# API log: every REST call this client made (for testing)
+# ------------------------------------------------------------
+
+if page == LOG:
+    st.caption(f"Every call to the StockPilot API at `{backend_url()}`, newest first.")
+    if st.button("Clear log"):
+        st.session_state.activity = []
+        st.rerun()
+    for entry in st.session_state.activity:
+        status = entry["status"]
+        icon = "🟢" if isinstance(status, int) and 200 <= status < 300 else "🔴"
+        with st.expander(f"{icon} {entry['time']} {entry['method']} {entry['endpoint']} → {status} · {entry['operation']}"):
+            detail = entry["detail"]
+            if isinstance(detail, (dict, list)):
+                st.json(detail)
+            else:
+                st.code(str(detail))
