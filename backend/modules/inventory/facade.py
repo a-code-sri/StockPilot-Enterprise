@@ -32,9 +32,6 @@ class InventoryFacade:
 
     # ---- cross-module API (no commit; caller owns the transaction) ----
 
-    def lock_item_by_name(self, name: str):
-        return self.repository.get_item_by_name(name, for_update=True)
-
     def lock_item(self, item_id: int):
         return self.repository.get_item(item_id, for_update=True)
 

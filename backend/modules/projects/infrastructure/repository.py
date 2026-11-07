@@ -65,12 +65,6 @@ class SQLAlchemyProjectsRepository(ProjectsRepositoryInterface):
         # Association-table writes bypass ORM mapper events, so emit explicitly.
         emit_projects_changed(self.db.connection(), reason="project_resources_set", project_id=project_id)
 
-    def get_project_resources(self, project_id: int) -> List[str]:
-        rows = self.db.execute(
-            project_resources.select().where(project_resources.c.project_id == project_id)
-        ).fetchall()
-        return [r.employee_id for r in rows]
-
     # ---------------- Tasks ----------------
 
     def add_task(self, project_id: int, fields: dict, predecessor_task_ids: List[int], resource_employee_ids: List[str]):

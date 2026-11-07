@@ -75,7 +75,7 @@ def build_period(db: Session, days: int, window: int, top_n: int, tz_offset_minu
 
     return {
         "range": {"start": start.isoformat(), "end": end.isoformat()},
-        "moving_average": {"window": window, "series": moving_average_series(delivered, start, end, window)},
+        "moving_average": {"days": days, "window": window, "series": moving_average_series(delivered, start, end, window)},
         "most_ordered_items": {"top_n": top_n, "series": [{"label": n, "value": int(q or 0)} for n, q in items]},
         "status_distribution": {
             "series": [{"label": s, "value": int(c or 0)} for s, c in statuses if int(c or 0) > 0]

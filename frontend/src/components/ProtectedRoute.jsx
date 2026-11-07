@@ -26,7 +26,7 @@ export default function ProtectedRoute({ children, permission }) {
           <h1 className="text-2xl font-semibold mb-3">No access</h1>
           <p className="text-gray-400">
             Your account needs the <code className="text-indigo-300">{permission}</code> permission to open
-            this page. Ask an administrator to grant it on the RBAC page.
+            this page. Ask an administrator to grant it on the Users &amp; Roles page.
           </p>
         </div>
       </div>

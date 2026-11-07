@@ -45,30 +45,6 @@ def emit_event(
     )
 
 
-def enqueue_event(
-    db: Session,
-    *,
-    module: str,
-    event_type: str,
-    payload: dict[str, Any],
-    aggregate_type: Optional[str] = None,
-    aggregate_id: Optional[str] = None,
-) -> AnalyticsOutbox:
-    """Add an outbox event to the current ORM transaction. Does NOT commit."""
-    row = AnalyticsOutbox(
-        module=module,
-        event_type=event_type,
-        payload=payload,
-        aggregate_type=aggregate_type,
-        aggregate_id=aggregate_id,
-        status=PENDING,
-        available_at=utcnow(),
-    )
-    db.add(row)
-    db.flush()
-    return row
-
-
 def fetch_and_lock_batch(db: Session, *, limit: int = 100) -> list[AnalyticsOutbox]:
     """
     Claim a batch of due rows with SELECT ... FOR UPDATE SKIP LOCKED so several

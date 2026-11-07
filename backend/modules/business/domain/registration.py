@@ -194,7 +194,7 @@ def verify_registration(
         result.warnings.extend(c.warnings)
         result.details[name] = c.details
 
-    g, p, c = checks.get("gstin"), checks.get("pan"), checks.get("cin")
+    g, c = checks.get("gstin"), checks.get("cin")
     effective_pan = pan or (gstin[2:12] if g and g.ok else "")
 
     if g and g.ok and pan and gstin[2:12] != pan:

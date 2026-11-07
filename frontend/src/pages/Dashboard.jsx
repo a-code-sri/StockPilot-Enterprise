@@ -9,28 +9,7 @@ import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
 import LineChart from "../components/charts/LineChart";
 import DonutChart from "../components/charts/DonutChart";
 import PieChart from "../components/charts/PieChart";
-
-function Panel({ title, subtitle, action, children }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      <div className="p-5 border-b border-gray-800 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-semibold">{title}</div>
-
-          {subtitle && (
-            <div className="text-xs text-gray-400 mt-1">
-              {subtitle}
-            </div>
-          )}
-        </div>
-
-        {action}
-      </div>
-
-      <div className="p-5">{children}</div>
-    </div>
-  );
-}
+import { Panel } from "../components/ui";
 
 function StatCard({ title, value, tone = "indigo" }) {
   const tones = {
