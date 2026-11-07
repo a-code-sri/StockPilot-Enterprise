@@ -1,0 +1,13 @@
+# FreshBasket look and feel; hides Streamlit's developer toolbar ("Deploy").
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#2e7d32"
+backgroundColor = "#fbfaf5"
+secondaryBackgroundColor = "#eef5e9"
+textColor = "#1f2a1f"

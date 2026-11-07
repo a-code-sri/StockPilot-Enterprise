@@ -51,7 +51,7 @@ def _to_json(data: Any) -> str:
     return text
 
 
-def _run_tool(db: Session, tool: Tool, args: Any) -> str:
+def _tool_data(db: Session, tool: Tool, args: Any) -> Any:
     if isinstance(args, str):
         try:
             args = json.loads(args or "{}")
@@ -60,11 +60,15 @@ def _run_tool(db: Session, tool: Tool, args: Any) -> str:
     if not isinstance(args, dict):
         args = {}
     try:
-        return _to_json(tool.run(db, **args))
+        return tool.run(db, **args)
     except Exception as e:  # a tool failure should not end the conversation
         logger.exception("AI tool %s failed", tool.name)
         db.rollback()
-        return _to_json({"error": f"{type(e).__name__}: {e}"})
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+def _run_tool(db: Session, tool: Tool, args: Any) -> str:
+    return _to_json(_tool_data(db, tool, args))
 
 
 def _clean_history(messages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -94,10 +98,16 @@ class Assistant:
         if not history or history[-1]["role"] != "user":
             return {"reply": "Ask me a question about your business data.", "tools_used": [], "mode": "none"}
         try:
-            return self._chat_with_tools(history)
+            result = self._chat_with_tools(history)
         except ToolsNotSupported:
             logger.info("Model lacks tool support; using context mode")
             return self._chat_with_context(history)
+        if not result["reply"]:
+            # Small models sometimes emit a malformed tool call that Ollama drops, leaving an
+            # empty message (seen with qwen2.5:3b on multi-part questions). Answer from data instead.
+            logger.info("Empty answer in tool mode; retrying in context mode")
+            return self._chat_with_context(history)
+        return result
 
     def _chat_with_tools(self, history: list[dict[str, str]]) -> dict[str, Any]:
         allowed = {t.name: t for t in self.tools}
@@ -138,7 +148,8 @@ class Assistant:
     def insights(self, module: str) -> dict[str, Any]:
         sources = INSIGHT_SOURCES[module]
         allowed = {t.name: t for t in self.tools}
-        data = {name: json.loads(_run_tool(self.db, allowed[name], {})) for name in sources if name in allowed}
+        # Raw results, not _run_tool's text: truncated JSON text would not parse back.
+        data = {name: _tool_data(self.db, allowed[name], {}) for name in sources if name in allowed}
         prompt = (
             f"Here is current {module} data as JSON:\n{_to_json(data)}\n\n"
             "Write a short briefing in markdown:\n"

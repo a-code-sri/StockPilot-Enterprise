@@ -116,3 +116,26 @@ def test_insight_sources_exist(module):
     from backend.modules.ai.tools import INSIGHT_SOURCES, TOOLS_BY_NAME
 
     assert all(name in TOOLS_BY_NAME for name in INSIGHT_SOURCES[module])
+
+
+def test_insights_handle_large_tool_results(monkeypatch):
+    big = Tool("big", "big", "inventory.read", {"type": "object", "properties": {}},
+               lambda db, **a: {"items": [{"name": f"item {i}", "qty": i} for i in range(2000)]})
+    monkeypatch.setattr(assistant_mod, "tools_for", lambda perms: [big])
+    monkeypatch.setattr(assistant_mod, "INSIGHT_SOURCES", {"inventory": ("big",)})
+    client = ScriptedClient([{"role": "assistant", "content": "- Lots of items"}])
+    out = assistant_mod.Assistant(FakeDB(), USER, {"inventory.read"}, client=client).insights("inventory")
+    assert out == {"module": "inventory", "summary": "- Lots of items", "sources": ["big"]}
+    assert "(truncated)" in client.calls[0]["messages"][-1]["content"]
+
+
+def test_empty_tool_mode_answer_falls_back_to_context(monkeypatch):
+    _fake_tools(monkeypatch)
+    client = ScriptedClient([
+        {"role": "assistant", "content": ""},  # malformed tool call dropped by Ollama
+        {"role": "assistant", "content": "3 widgets, cash 10."},
+    ])
+    out = assistant_mod.Assistant(FakeDB(), USER, {"inventory.read", "accounts.read"}, client=client).chat(
+        [{"role": "user", "content": "stock and cash?"}]
+    )
+    assert out == {"reply": "3 widgets, cash 10.", "tools_used": ["stock", "money"], "mode": "context"}

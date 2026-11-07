@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>StockPilot Enterprise</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="StockPilot runs a small business's inventory, deliveries, accounts, staff and projects in one app, with live analytics and a private AI assistant.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: left-aligned product page on a 1120px column; screenshots sit in device-like frames,
+   setup is a numbered sequence because order matters there. */
+:root {
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --sunken: #eceef6;
+  --ink: #151a30;
+  --muted: #5a6078;
+  --line: #d9dcea;
+  --accent: #4f46e5;
+  --accent-ink: #ffffff;
+  --accent-soft: #e7e6fd;
+  --produce: #2e7d32;
+  --produce-soft: #e5f1e3;
+  --code-bg: #151a30;
+  --code-ink: #e4e7f5;
+  --code-dim: #8e95b5;
+  --shadow: 0 1px 2px rgb(21 26 48 / .06), 0 12px 32px -12px rgb(21 26 48 / .25);
+
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --step--1: .875rem;
+  --step-0: 1rem;
+  --step-1: 1.2rem;
+  --step-2: 1.6rem;
+  --step-3: clamp(1.9rem, 1.4rem + 2vw, 2.6rem);
+  --step-4: clamp(2.4rem, 1.6rem + 3.6vw, 4rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0e1a; --surface: #141a2e; --sunken: #10152a; --ink: #e6e8f3; --muted: #9aa0bd; --line: #262d48;
+    --accent: #8b85ff; --accent-ink: #0b0e1a; --accent-soft: #221f4d; --produce: #7cc47f; --produce-soft: #16291a;
+    --code-bg: #070912; --code-ink: #e4e7f5; --code-dim: #7e85a6;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 16px 40px -16px rgb(0 0 0 / .7);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b0e1a; --surface: #141a2e; --sunken: #10152a; --ink: #e6e8f3; --muted: #9aa0bd; --line: #262d48;
+  --accent: #8b85ff; --accent-ink: #0b0e1a; --accent-soft: #221f4d; --produce: #7cc47f; --produce-soft: #16291a;
+  --code-bg: #070912; --code-ink: #e4e7f5; --code-dim: #7e85a6;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 16px 40px -16px rgb(0 0 0 / .7);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 var(--step-0)/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+img { max-width: 100%; height: auto; display: block; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.1; text-wrap: balance; margin: 0; }
+h2 { font-size: var(--step-3); font-weight: 800; letter-spacing: -.01em; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+p { margin: 0; }
+code { font-family: var(--mono); font-size: .92em; background: var(--sunken); padding: .1em .35em; border-radius: 4px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; }
+.section { padding-block: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line); display: grid; gap: 32px; }
+.eyebrow { font: 500 var(--step--1)/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.lede { font-size: var(--step-1); color: var(--muted); max-width: 62ch; }
+.head { display: grid; gap: 14px; max-width: 760px; }
+
+/* ---------- top bar ---------- */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; font: 800 1.25rem/1 var(--display); color: var(--ink); text-decoration: none; }
+.brand-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+.brand-mark svg { width: 18px; height: 18px; }
+.nav { display: flex; gap: 4px 20px; flex-wrap: wrap; font-size: var(--step--1); }
+.nav a { color: var(--muted); text-decoration: none; }
+.nav a:hover { color: var(--ink); }
+
+/* ---------- hero ---------- */
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(28px, 4vw, 56px); align-items: center; padding-block: clamp(32px, 6vw, 72px) clamp(56px, 8vw, 96px); }
+.hero h1 { font-size: var(--step-4); font-weight: 800; letter-spacing: -.02em; }
+.hero-copy { display: grid; gap: 22px; min-width: 0; }
+.actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px; font-weight: 600; text-decoration: none; border: 1px solid transparent; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-ghost { border-color: var(--line); color: var(--ink); background: var(--surface); }
+.btn-ghost:hover { border-color: var(--accent); }
+.stack { display: flex; flex-wrap: wrap; gap: 8px; font: 500 .8rem/1 var(--mono); color: var(--muted); }
+.stack span { border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: var(--surface); }
+
+.frame { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.frame-bar { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--sunken); }
+.frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+.frame-bar span { margin-left: 8px; font: 400 .75rem/1 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; }
+
+/* ---------- modules ---------- */
+.modules { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.module { background: var(--surface); padding: 22px; display: grid; gap: 8px; align-content: start; }
+.module p { color: var(--muted); font-size: .95rem; }
+.module .tag { font: 500 .72rem/1 var(--mono); color: var(--muted); letter-spacing: .04em; }
+
+/* ---------- tour ---------- */
+.tour { display: grid; grid-template-columns: minmax(0, 280px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.tour-tabs { display: grid; gap: 6px; }
+.tour-tab { text-align: left; font: inherit; color: var(--ink); background: none; border: 1px solid transparent; border-radius: 10px; padding: 12px 14px; cursor: pointer; display: grid; gap: 2px; }
+.tour-tab small { color: var(--muted); font-size: .85rem; }
+.tour-tab:hover { background: var(--surface); border-color: var(--line); }
+.tour-tab[aria-selected="true"] { background: var(--surface); border-color: var(--accent); box-shadow: var(--shadow); }
+.tour-tab[aria-selected="true"] strong { color: var(--accent); }
+
+/* ---------- pipeline ---------- */
+.pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+.node { flex: 1 1 150px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 4px; min-width: 0; position: relative; }
+.node b { font: 600 .95rem/1.3 var(--body); }
+.node span { font: 400 .78rem/1.4 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.node.hot { border-color: var(--accent); background: var(--accent-soft); }
+.arrow { align-self: center; color: var(--muted); font: 500 1.1rem/1 var(--mono); }
+.trace { background: var(--code-bg); color: var(--code-ink); border-radius: 12px; padding: 18px 20px; font: 400 .85rem/1.8 var(--mono); overflow-x: auto; white-space: pre; }
+.trace .dim { color: var(--code-dim); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 24px; }
+.point { display: grid; gap: 6px; }
+.point p { color: var(--muted); }
+
+/* ---------- AI + shop pairs ---------- */
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+figure { margin: 0; display: grid; gap: 10px; min-width: 0; }
+figcaption { font-size: .9rem; color: var(--muted); }
+.shop { --accent: var(--produce); --accent-soft: var(--produce-soft); }
+.shop .eyebrow { color: var(--produce); }
+.shop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.ticks { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.ticks li { padding-left: 26px; position: relative; color: var(--muted); }
+.ticks li::before { content: ""; position: absolute; left: 4px; top: .55em; width: 9px; height: 9px; border-radius: 3px; background: var(--accent); }
+.ticks b { color: var(--ink); font-weight: 600; }
+
+/* ---------- setup ---------- */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: step; }
+.step { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 0 20px; counter-increment: step; }
+.step-num { display: grid; justify-items: center; grid-template-rows: auto 1fr; }
+.step-num::before { content: counter(step); width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font: 600 1rem/1 var(--mono); background: var(--surface); border: 2px solid var(--accent); color: var(--accent); }
+.step-num::after { content: ""; width: 2px; background: var(--line); margin-block: 6px; }
+.step:last-child .step-num::after { display: none; }
+.step-body { padding-bottom: 36px; display: grid; gap: 12px; min-width: 0; }
+.step-body h3 { padding-top: 8px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.step-body p { color: var(--muted); max-width: 70ch; }
+.opt { font: 500 .7rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; }
+.code { position: relative; background: var(--code-bg); border-radius: 12px; min-width: 0; }
+.code pre { margin: 0; padding: 16px 18px; padding-right: 76px; overflow-x: auto; color: var(--code-ink); font: 400 .88rem/1.7 var(--mono); }
+.code pre code { background: none; padding: 0; border-radius: 0; font-size: inherit; color: inherit; }
+.code .c { color: var(--code-dim); }
+.copy { position: absolute; top: 10px; right: 10px; font: 500 .75rem/1 var(--mono); color: var(--code-ink); background: rgb(255 255 255 / .08); border: 1px solid rgb(255 255 255 / .16); border-radius: 6px; padding: 6px 9px; cursor: pointer; }
+.copy:hover { background: rgb(255 255 255 / .16); }
+.shot-sm { max-width: 520px; }
+.note { border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 16px; border-radius: 0 10px 10px 0; color: var(--muted); font-size: .95rem; }
+
+footer { padding-block: 40px 56px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; color: var(--muted); font-size: var(--step--1); }
+footer nav { display: flex; gap: 18px; flex-wrap: wrap; }
+
+@media (max-width: 860px) {
+  .hero, .tour, .pair, .shop-grid { grid-template-columns: minmax(0, 1fr); }
+  .tour-tabs { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .tour-tab small { display: none; }
+  .arrow { display: none; }
+}
+@media (max-width: 480px) {
+  .step { grid-template-columns: 40px minmax(0, 1fr); gap: 0 12px; }
+  .step-num::before { width: 32px; height: 32px; font-size: .9rem; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="bar">
+  <a class="brand" href="#top" id="top">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/></svg>
+    </span>
+    StockPilot
+  </a>
+  <nav class="nav" aria-label="Sections">
+    <a href="#modules">Features</a>
+    <a href="#how">How it works</a>
+    <a href="#ai">AI assistant</a>
+    <a href="#shop">Demo shop</a>
+    <a href="#setup">Setup</a>
+    <a href="https://github.com/a-code-sri/StockPilot-Enterprise">GitHub</a>
+  </nav>
+</header>
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-copy">
+    <span class="eyebrow">Business operating system</span>
+    <h1 id="hero-title">Stock, orders and money in one live view.</h1>
+    <p class="lede">StockPilot is one app for a small manufacturer or shop. It covers inventory, deliveries, accounts, staff and projects. Its dashboards update as soon as anything changes, and a private AI assistant answers questions about your own data.</p>
+    <div class="actions">
+      <a class="btn btn-primary" href="#setup">Set it up in 5 steps</a>
+      <a class="btn btn-ghost" href="https://github.com/a-code-sri/StockPilot-Enterprise">View the code</a>
+    </div>
+    <div class="stack" aria-label="Built with">
+      <span>React + Vite</span><span>FastAPI</span><span>PostgreSQL 16</span><span>Ollama</span><span>Docker Compose</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8080/dashboard</span></div>
+    <img src="screenshots/dashboard.webp" width="1440" height="900" alt="StockPilot dashboard with inventory alerts, a consumption chart, an income versus expenses ring and headcount by department.">
+  </div>
+</section>
+
+<section class="section" id="modules" aria-labelledby="modules-title">
+  <div class="head">
+    <span class="eyebrow">What it does</span>
+    <h2 id="modules-title">Every part of the business, connected</h2>
+    <p class="lede">The modules share one database. A delivery takes stock off the shelf when it leaves, a sale shows up in the accounts, and every chart follows along.</p>
+  </div>
+  <div class="modules">
+    <div class="module"><span class="tag">inventory</span><h3>Inventory</h3><p>Items with receive, consume, deliver, order and return movements, expiry dates and a full history. Rows are locked during updates, so two people can't oversell the same stock.</p></div>
+    <div class="module"><span class="tag">delivery</span><h3>Deliveries</h3><p>Orders move from pending to packed, out for delivery, then delivered. Stock is deducted on dispatch and comes back if a delivery fails or is cancelled.</p></div>
+    <div class="module"><span class="tag">accounts</span><h3>Accounts</h3><p>A credit and debit ledger with the current balance, 30-day net, category breakdowns and a liquidity score.</p></div>
+    <div class="module"><span class="tag">organization</span><h3>Organization</h3><p>Employees, departments and reporting lines, drawn as an org chart. The app refuses a reporting line that would loop back on itself.</p></div>
+    <div class="module"><span class="tag">projects</span><h3>Projects</h3><p>Tasks with dependencies, CPM/PERT critical path, slack per task and warnings when one person is booked on overlapping tasks.</p></div>
+    <div class="module"><span class="tag">analytics</span><h3>Live analytics</h3><p>Reorder suggestions, stock-out forecasts, dead stock, schedule risk and anomaly flags. The figures use median/MAD statistics, so one odd day doesn't trigger false alarms.</p></div>
+    <div class="module"><span class="tag">business</span><h3>Business profile</h3><p>Checks the GSTIN checksum, PAN holder type, CIN structure and whether they agree with each other, entirely offline. An admin then approves the profile.</p></div>
+    <div class="module"><span class="tag">rbac</span><h3>Users &amp; roles</h3><p>Permissions like <code>inventory.read</code> and <code>accounts.write</code>, one-time password reset links, daily backups and HTTPS hosting.</p></div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="tour-title">
+  <div class="head">
+    <span class="eyebrow">A look inside</span>
+    <h2 id="tour-title">The screens your team uses</h2>
+  </div>
+  <div class="tour">
+    <div class="tour-tabs" role="tablist" aria-label="Screens">
+      <button class="tour-tab" role="tab" id="tab-inventory" aria-selected="true" aria-controls="tour-panel" data-src="screenshots/inventory.webp" data-url="localhost:8080/inventory" data-alt="Inventory table listing fruits with stock, price, expiry date and status."><strong>Inventory</strong><small>Stock, prices and expiry dates</small></button>
+      <button class="tour-tab" role="tab" id="tab-delivery" aria-selected="false" aria-controls="tour-panel" data-src="screenshots/delivery.webp" data-url="localhost:8080/delivery" data-alt="Delivery page with a new-delivery form and the list of active orders."><strong>Delivery</strong><small>Orders through dispatch</small></button>
+      <button class="tour-tab" role="tab" id="tab-accounts" aria-selected="false" aria-controls="tour-panel" data-src="screenshots/analytics-accounts.webp" data-url="localhost:8080/analytics/accounts" data-alt="Accounts analytics showing income, expenses, net and a liquidity score."><strong>Accounts analytics</strong><small>Income, expenses, liquidity</small></button>
+      <button class="tour-tab" role="tab" id="tab-org" aria-selected="false" aria-controls="tour-panel" data-src="screenshots/organization.webp" data-url="localhost:8080/organization" data-alt="Organization page listing employees with role, salary, manager and departments."><strong>Organization</strong><small>Staff and reporting lines</small></button>
+      <button class="tour-tab" role="tab" id="tab-project" aria-selected="false" aria-controls="tour-panel" data-src="screenshots/project.webp" data-url="localhost:8080/projects/1" data-alt="Project timeline with the critical path highlighted in red and tasks with slack in blue."><strong>Project plan</strong><small>Critical path timeline</small></button>
+      <button class="tour-tab" role="tab" id="tab-business" aria-selected="false" aria-controls="tour-panel" data-src="screenshots/business.webp" data-url="localhost:8080/business" data-alt="Business profile showing a GSTIN and PAN that passed all automatic checks and are awaiting review."><strong>Business profile</strong><small>GSTIN and PAN checks</small></button>
+    </div>
+    <div class="frame" id="tour-panel" role="tabpanel" aria-labelledby="tab-inventory">
+      <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span id="tour-url">localhost:8080/inventory</span></div>
+      <img id="tour-img" src="screenshots/inventory.webp" width="1440" height="900" alt="Inventory table listing fruits with stock, price, expiry date and status.">
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how" aria-labelledby="how-title">
+  <div class="head">
+    <span class="eyebrow">How it works</span>
+    <h2 id="how-title">A change reaches every dashboard in about a second</h2>
+    <p class="lede">Writes and their analytics events are saved in one database transaction, so an update can never be lost between the two. A worker turns events into ready-made figures, and PostgreSQL tells the browser when they change.</p>
+  </div>
+  <div class="pipe" role="list" aria-label="Data flow">
+    <div class="node" role="listitem"><b>Browser or client app</b><span>React UI · REST calls</span></div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="node" role="listitem"><b>FastAPI</b><span>auth · permissions · business rules</span></div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="node hot" role="listitem"><b>PostgreSQL</b><span>business rows + analytics_outbox, one transaction</span></div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="node" role="listitem"><b>Analytics worker</b><span>outbox → projection tables</span></div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="node" role="listitem"><b>pg_notify → WebSocket</b><span>dashboards refresh live</span></div>
+  </div>
+  <div class="trace" role="img" aria-label="Example trace of one delivery being dispatched"><span class="dim"># one order leaving the FreshBasket shop</span>
+PUT  /delivery/FB-261107-CYK8/status   {"status": "out_for_delivery"}
+     inventory  Banana (dozen)  −2   <span class="dim">· row locked, stock checked</span>
+     outbox     delivery_changed, stock_consumed   <span class="dim">· same commit</span>
+     worker     delivery and inventory projections updated
+     notify     realtime_events   <span class="dim">→ open dashboards reload</span></div>
+  <div class="cols">
+    <div class="point"><h3>Nothing is counted twice</h3><p>Failed events retry with backoff and then park as <code>dead</code> for inspection. A bad event can't block the queue or skew a chart.</p></div>
+    <div class="point"><h3>Rebuild from scratch</h3><p>Every figure can be recalculated from the source rows with one command. That's useful after a fix or a data import.</p></div>
+    <div class="point"><h3>Clients only need the API</h3><p>Anything that can make an HTTP request can join in. The demo fruit shop below is a separate app that uses nothing else.</p></div>
+  </div>
+</section>
+
+<section class="section" id="ai" aria-labelledby="ai-title">
+  <div class="head">
+    <span class="eyebrow">AI assistant</span>
+    <h2 id="ai-title">Ask your business a question</h2>
+    <p class="lede">A small open model runs on your own machine through Ollama, so no data leaves the server. The assistant reads live figures with the same permissions as the person asking, and it can't change anything.</p>
+  </div>
+  <div class="pair">
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8080/assistant</span></div>
+        <img src="screenshots/assistant.webp" width="1440" height="900" alt="AI assistant answering which fruits will run out first and summarising cash flow by supplier and customer." loading="lazy"></div>
+      <figcaption>Chat looks up stock-out forecasts and the accounts summary, then answers in plain language and names its sources.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8080/analytics/inventory</span></div>
+        <img src="screenshots/analytics-inventory-ai.webp" width="1440" height="900" alt="Inventory analytics page with an AI-written briefing about near-expiry fruit and recommended reorders." loading="lazy"></div>
+      <figcaption>Every analytics page has a <b>Summarize</b> button that gives a short briefing with recommended actions.</figcaption>
+    </figure>
+  </div>
+  <p class="note">Setting up the model takes one command with Docker, and nothing has to be installed on Windows. See the <a href="https://github.com/a-code-sri/StockPilot-Enterprise/blob/main/docs/AI_SETUP.md">AI setup guide</a>. It covers both ways to install it and fixes for common problems.</p>
+</section>
+
+<section class="section shop" id="shop" aria-labelledby="shop-title">
+  <div class="head">
+    <span class="eyebrow">Demo client · FreshBasket Fruits</span>
+    <h2 id="shop-title">A fruit shop that runs on StockPilot</h2>
+    <p class="lede">FreshBasket is a separate point-of-sale app for an imagined fruit shop. It shows how a real business would use StockPilot. It also works as the test client: everything it does goes through the public REST API and appears live on the StockPilot dashboards.</p>
+  </div>
+  <div class="shop-grid">
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Counter</span></div>
+        <img src="screenshots/shop-counter.webp" width="1440" height="900" alt="FreshBasket counter screen with fruit cards, quantities and a bill totalling 1,480 rupees." loading="lazy"></div>
+      <figcaption>Counter: pick fruit from the shelf, take payment by cash, UPI or card.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Orders</span></div>
+        <img src="screenshots/shop-orders.webp" width="1440" height="900" alt="FreshBasket open orders with buttons to pack, send out or cancel each home delivery." loading="lazy"></div>
+      <figcaption>Orders: home deliveries move from packed to out for delivery to delivered and paid.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Stock</span></div>
+        <img src="screenshots/shop-stock.webp" width="1440" height="900" alt="FreshBasket stock table with days left before expiry, plus forms to receive stock and write off spoilage." loading="lazy"></div>
+      <figcaption>Stock: receive from suppliers, write off spoiled fruit, add new products.</figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Busy day</span></div>
+        <img src="screenshots/shop-busy-day.webp" width="1440" height="900" alt="FreshBasket busy day simulation log listing completed sales and a summary of the day." loading="lazy"></div>
+      <figcaption>Busy day: simulates customers, riders, restocks and spoilage to load-test the whole system.</figcaption>
+    </figure>
+  </div>
+  <ul class="ticks">
+    <li><b>Counter sale</b> creates a delivery linked to inventory, completes it at once (stock deducted) and records the payment as income.</li>
+    <li><b>Home delivery</b> stays open until the rider delivers it. Payment is recorded then. A failed delivery returns the stock automatically.</li>
+    <li><b>Receiving stock</b> adds to inventory and records the supplier payment as an expense. <b>Spoilage</b> is written off with a reason.</li>
+    <li><b>API log</b> lists every request the shop made, which is handy while testing.</li>
+  </ul>
+</section>
+
+<section class="section" id="setup" aria-labelledby="setup-title">
+  <div class="head">
+    <span class="eyebrow">Setup</span>
+    <h2 id="setup-title">Run it on your computer</h2>
+    <p class="lede">Docker runs everything: database, API, analytics worker, web app and backups. Plan on 15 minutes the first time, most of it waiting for the build.</p>
+  </div>
+  <ol class="steps">
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Install Docker</h3>
+      <p>On Windows or macOS install <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a> and start it. On Windows, accept the WSL 2 setup it suggests. On Linux install Docker Engine with the Compose plugin. You need about 4 GB of free RAM, or 8 GB with the AI assistant.</p>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Get the code</h3>
+      <div class="code"><pre><code>git clone https://github.com/a-code-sri/StockPilot-Enterprise.git
+cd StockPilot-Enterprise</code></pre></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Create your settings file</h3>
+      <p>Copy the example file, then open <code>.env</code> in any editor and set a database password, a secret key and the first admin account.</p>
+      <div class="code"><pre><code><span class="c"># macOS / Linux / Git Bash        (PowerShell: copy .env.example .env)</span>
+cp .env.example .env
+
+<span class="c"># generate a JWT_SECRET</span>
+python -c "import secrets; print(secrets.token_urlsafe(48))"</code></pre></div>
+      <div class="code"><pre><code><span class="c"># .env: the lines to change</span>
+POSTGRES_PASSWORD=a-long-random-password
+JWT_SECRET=paste-the-generated-secret-here
+ADMIN_USERNAME=admin
+ADMIN_EMAIL=you@example.com
+ADMIN_PASSWORD=a-strong-password</code></pre></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Start StockPilot</h3>
+      <p>The first build downloads and compiles everything, which takes a few minutes. Later starts take seconds. Database changes are applied automatically.</p>
+      <div class="code"><pre><code>docker compose up -d --build
+docker compose ps        <span class="c"># api, db and web should say "healthy"</span></code></pre></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Sign in</h3>
+      <p>Open <a href="http://localhost:8080">http://localhost:8080</a> and sign in with <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code>. Add other people on <b>Users &amp; Roles</b>.</p>
+      <div class="frame shot-sm"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8080</span></div>
+        <img src="screenshots/login.webp" width="1440" height="900" alt="StockPilot sign-in screen with username and password fields." loading="lazy"></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Turn on the AI assistant <span class="opt">Optional</span></h3>
+      <p>This starts Ollama in Docker and downloads the <code>qwen2.5:3b</code> model once (about 2 GB). When the download finishes, the AI Assistant page and the Summarize buttons start working.</p>
+      <div class="code"><pre><code>docker compose --profile ai up -d
+docker compose logs -f ollama-pull     <span class="c"># wait for "success", then Ctrl+C</span></code></pre></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Open the FreshBasket shop <span class="opt">Optional</span></h3>
+      <p>Start the demo shop, open <a href="http://localhost:8501">http://localhost:8501</a> and sign in with the same StockPilot account. Click <b>Load starter catalogue</b>, make a sale, and watch the StockPilot dashboard change.</p>
+      <div class="code"><pre><code>docker compose --profile simulator up -d --build</code></pre></div>
+    </div></li>
+    <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
+      <h3>Put it online with HTTPS <span class="opt">Optional</span></h3>
+      <p>On a cloud server with a domain name, one extra file adds Caddy, which gets a free certificate that renews automatically. The <a href="https://github.com/a-code-sri/StockPilot-Enterprise/blob/main/docs/DEPLOYMENT.md">deployment guide</a> covers the server, DNS, firewall, updates and backups.</p>
+      <div class="code"><pre><code>docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build</code></pre></div>
+    </div></li>
+  </ol>
+  <p class="note">Stop everything with <code>docker compose down</code>. Your data stays in a Docker volume until you add <code>-v</code>. Backups are written to the <code>backups/</code> folder every day.</p>
+</section>
+
+<footer>
+  <span>StockPilot Enterprise · an internship project</span>
+  <nav aria-label="Project links">
+    <a href="https://github.com/a-code-sri/StockPilot-Enterprise">Source code</a>
+    <a href="https://github.com/a-code-sri/StockPilot-Enterprise/blob/main/README.md">README</a>
+    <a href="https://github.com/a-code-sri/StockPilot-Enterprise/blob/main/docs/AI_SETUP.md">AI setup</a>
+    <a href="https://github.com/a-code-sri/StockPilot-Enterprise/blob/main/docs/DEPLOYMENT.md">Deployment</a>
+  </nav>
+</footer>
+
+</div>
+<script>
+(function () {
+  // Screenshot tour: the first screen is in the markup; the tabs swap the image.
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tour-tab"));
+  var img = document.getElementById("tour-img");
+  var url = document.getElementById("tour-url");
+  var panel = document.getElementById("tour-panel");
+  function select(tab, focus) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+    });
+    img.src = tab.dataset.src;
+    img.alt = tab.dataset.alt;
+    url.textContent = tab.dataset.url;
+    panel.setAttribute("aria-labelledby", tab.id);
+    if (focus) tab.focus();
+  }
+  tabs.forEach(function (tab, i) {
+    tab.tabIndex = i === 0 ? 0 : -1;
+    tab.addEventListener("click", function () { select(tab, false); });
+    tab.addEventListener("keydown", function (e) {
+      var d = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+      if (!d) return;
+      e.preventDefault();
+      select(tabs[(i + d + tabs.length) % tabs.length], true);
+    });
+  });
+
+  // Copy buttons on code blocks (comments are skipped).
+  document.querySelectorAll(".code").forEach(function (block) {
+    var btn = document.createElement("button");
+    btn.className = "copy";
+    btn.type = "button";
+    btn.textContent = "Copy";
+    btn.setAttribute("aria-label", "Copy commands");
+    block.appendChild(btn);
+    btn.addEventListener("click", function () {
+      var code = block.querySelector("code").cloneNode(true);
+      code.querySelectorAll(".c").forEach(function (c) { c.remove(); });
+      var text = code.textContent.split("\n").map(function (l) { return l.replace(/\s+$/, ""); })
+        .filter(function (l) { return l; }).join("\n");
+      function done(label) { btn.textContent = label; setTimeout(function () { btn.textContent = "Copy"; }, 1600); }
+      function fallback() {
+        var range = document.createRange();
+        range.selectNodeContents(block.querySelector("code"));
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+        done("Press Ctrl+C");
+      }
+      try {
+        navigator.clipboard.writeText(text).then(function () { done("Copied"); }, fallback);
+      } catch (e) { fallback(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

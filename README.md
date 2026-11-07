@@ -55,7 +55,7 @@ Optional profiles:
 
 ```bash
 docker compose --profile ai up -d          # + Ollama and a one-off model download (~2 GB)
-docker compose --profile simulator up -d   # + Streamlit traffic simulator on http://localhost:8501
+docker compose --profile simulator up -d   # + FreshBasket fruit shop app on http://localhost:8501
 ```
 
 Stop with `docker compose down` (add `-v` to also delete the database volume).
@@ -76,6 +76,50 @@ pre-fetched summary of your data.
 
 Users need the `ai.use` permission; the assistant can only read modules the user can read.
 Without Ollama, the rest of the app works normally and AI buttons show as unavailable.
+
+Step-by-step instructions and fixes for common Ollama installation problems:
+**[docs/AI_SETUP.md](docs/AI_SETUP.md)**.
+
+## FreshBasket Fruits (demo client app)
+
+`client_app/` is a point-of-sale app for an imagined fruit shop, built only on the StockPilot REST API.
+It shows how a real business would use StockPilot, and it is the end-to-end test client:
+everything it does appears live on the StockPilot dashboards.
+
+- **Counter**: sell from the shelf; the sale becomes a delivery linked to inventory (stock is
+  deducted) and the payment is recorded as income.
+- **Orders**: home deliveries go packed → out for delivery → delivered (paid) or failed (stock returned).
+- **Stock**: receive from suppliers (stock + expense), write off spoilage, add products.
+- **Cash book**: balance, recent entries, expenses such as rent and wages.
+- **Busy day**: simulates customers, riders, restocks and spoilage to generate realistic traffic.
+- **API log**: every request the app made, for debugging.
+
+```bash
+docker compose --profile simulator up -d --build    # http://localhost:8501
+# or without Docker:
+cd client_app && pip install -r requirements.txt && streamlit run app.py
+```
+
+Sign in with a StockPilot account that has the inventory, delivery and accounts write
+permissions (the admin works), then click **Load starter catalogue**. `SHOP_NAME` in `.env`
+renames the shop.
+
+## Project website
+
+[`website/`](website/) is a one-page site describing the project and its setup, with screenshots.
+
+**Host it on Streamlit Community Cloud (free):**
+
+1. Push the repository to GitHub.
+2. Sign in at <https://share.streamlit.io> with GitHub and click **Create app → Deploy a public app from GitHub**.
+3. Pick this repository and branch `main`, set **Main file path** to `website/streamlit_app.py`,
+   optionally choose a subdomain (e.g. `stockpilot-enterprise.streamlit.app`), and click **Deploy**.
+
+The app redeploys by itself whenever `website/` changes on `main`. To preview it locally:
+`pip install streamlit` then `streamlit run website/streamlit_app.py`.
+
+You can also open `website/index.html` directly, or publish it with GitHub Pages: **Settings → Pages →
+Source: GitHub Actions**, then run the *Website* workflow (it also runs on every push to `website/`).
 
 ## Business registration verification
 
@@ -187,6 +231,8 @@ backend/
   workers/     analytics worker, dispatcher, projection rebuild
   alembic/     migrations
 frontend/      React app (pages/, components/, context/, realtime/)
-client_app/    Streamlit simulator that drives the REST API
+client_app/    FreshBasket Fruits: Streamlit shop app that drives the REST API (demo client and test traffic)
+website/       project website (static HTML + screenshots)
+docs/          DEPLOYMENT.md (HTTPS hosting), AI_SETUP.md (Ollama)
 tests/         unit/ and integration/
 ```

@@ -3,10 +3,10 @@
 #   cp .env.example .env        # then edit secrets
 #   docker compose up -d --build                     # app at http://localhost:8080
 #   docker compose --profile ai up -d --build        # + local AI (Ollama)
-#   docker compose --profile simulator up -d         # + Streamlit simulator on :8501
+#   docker compose --profile simulator up -d         # + FreshBasket fruit shop app on :8501
 #
 # Services: db (PostgreSQL) -> api (FastAPI, runs migrations) -> worker (analytics
-# outbox) ; web (nginx: React app + /api proxy) ; optional ollama / simulator.
+# outbox) ; web (nginx: React app + /api proxy) ; optional ollama / fruit shop client.
 
 name: stockpilot
 
@@ -127,15 +127,18 @@ services:
     depends_on: [ollama]
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}"]
-    restart: "no"
+    # Wait for the server (first start can be slow), then download the model once.
+    entrypoint: ["sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}"]
+    restart: on-failure
 
-  # ---------------- optional: Streamlit simulator ----------------
+  # ---------------- optional: FreshBasket fruit shop (client app / traffic simulator) ----------------
   simulator:
     build: ./client_app
     profiles: ["simulator"]
     environment:
       STOCKPILOT_API_URL: http://api:8000
+      STOCKPILOT_WEB_URL: http://localhost:${WEB_PORT:-8080}
+      SHOP_NAME: ${SHOP_NAME:-FreshBasket Fruits}
     depends_on:
       api:
         condition: service_healthy
