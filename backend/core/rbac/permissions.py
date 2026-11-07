@@ -3,7 +3,7 @@ Single source of truth for permission names.
 
 Convention: `<module>.read` grants read access to a module *and* its analytics;
 `<module>.write` grants create/update/delete. Routers must only use names from
-PERMISSIONS (enforced by tests/test_permissions.py).
+PERMISSIONS (enforced by tests/unit/test_core.py).
 """
 
 ADMIN_ROLE = "admin"

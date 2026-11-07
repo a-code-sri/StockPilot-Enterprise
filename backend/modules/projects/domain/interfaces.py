@@ -24,10 +24,6 @@ class ProjectsRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def get_project_resources(self, project_id: int) -> List[str]:
-        pass
-
-    @abstractmethod
     def add_task(self, project_id: int, fields: dict, predecessor_task_ids: List[int], resource_employee_ids: List[str]):
         pass
 

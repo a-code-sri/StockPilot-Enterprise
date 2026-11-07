@@ -21,7 +21,6 @@ from backend.modules.organization.infrastructure.projections import Organization
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_KEY = 0  # single row
-DEFAULT_BINS = 10
 
 
 def _top_executive(db: Session) -> dict | None:

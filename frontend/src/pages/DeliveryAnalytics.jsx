@@ -7,23 +7,8 @@ import BarChart from "../components/charts/BarChart";
 import PieChart from "../components/charts/PieChart";
 import HistogramChart from "../components/charts/HistogramChart";
 import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
-import { InsightsPanel } from "../components/ui";
+import { InsightsPanel, Panel } from "../components/ui";
 import { tzOffsetMinutes } from "../lib/format";
-function Panel({ title, subtitle, right, children }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      <div className="p-5 border-b border-gray-800 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-semibold">{title}</div>
-          {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
-        </div>
-        {right}
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
-  );
-}
-
 function Badge({ text }) {
   return (
     <span className="text-xs px-2 py-1 rounded-lg border bg-indigo-500/10 border-indigo-500/30 text-indigo-200">
@@ -170,7 +155,7 @@ export default function DeliveryAnalytics() {
                 <Panel
                   title="Daily Deliveries Moving Average (Last Month)"
                   subtitle={`Delivered orders • ${data.moving_average.month.days} days • window ${data.moving_average.month.window}`}
-                  right={<Badge text="Month" />}
+                  action={<Badge text="Month" />}
                 >
                   <LineChart data={monthMA} />
                 </Panel>
@@ -180,7 +165,7 @@ export default function DeliveryAnalytics() {
                 <Panel
                   title="Daily Deliveries Moving Average (Last Year)"
                   subtitle={`Delivered orders • ${data.moving_average.year.days} days • window ${data.moving_average.year.window}`}
-                  right={<Badge text="Year" />}
+                  action={<Badge text="Year" />}
                 >
                   <LineChart data={yearMA} />
                 </Panel>

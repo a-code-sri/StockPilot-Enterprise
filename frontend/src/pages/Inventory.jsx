@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import api, { errorMessage } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
+import { money } from "../lib/format";
 
 const STATUSES = [
   ["under_use", "Under use"],
@@ -18,8 +19,6 @@ const MOVEMENTS = [
 ];
 
 const EMPTY_FORM = { name: "", quantity: "", on_order_quantity: "", price: "", status: "under_use", expiry_date: "" };
-
-const money = (v) => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function MovementForm({ item, onDone, onError }) {
   const [action, setAction] = useState("consume");

@@ -4,22 +4,7 @@ import api from "../api";
 import LineChart from "../components/charts/LineChart";
 import BarChart from "../components/charts/BarChart";
 import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
-import { InsightsPanel } from "../components/ui";
-
-function Panel({ title, subtitle, children, right }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      <div className="p-5 border-b border-gray-800 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-semibold">{title}</div>
-          {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
-        </div>
-        {right}
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
-  );
-}
+import { InsightsPanel, Panel } from "../components/ui";
 
 function Badge({ text, tone = "indigo" }) {
   const map = {
@@ -178,7 +163,7 @@ export default function InventoryAnalytics() {
             <Panel
               title="Consumption (Daily)"
               subtitle="Total consumed/delivered quantity per day"
-              right={<Badge text={`${settings.chart_days} days`} tone="indigo" />}
+              action={<Badge text={`${settings.chart_days} days`} tone="indigo" />}
             >
               <LineChart data={consumptionForChart} />
             </Panel>
@@ -188,7 +173,7 @@ export default function InventoryAnalytics() {
             <Panel
               title="Orders (Monthly)"
               subtitle="Purchase orders placed per month"
-              right={<Badge text={`${settings.order_months} months`} tone="purple" />}
+              action={<Badge text={`${settings.order_months} months`} tone="purple" />}
             >
               <BarChart data={ordersForChart} />
             </Panel>

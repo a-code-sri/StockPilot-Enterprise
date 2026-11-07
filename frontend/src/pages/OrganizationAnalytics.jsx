@@ -4,22 +4,7 @@ import api from "../api";
 import PieChart from "../components/charts/PieChart";
 import HistogramChart from "../components/charts/HistogramChart";
 import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
-import { InsightsPanel } from "../components/ui";
-function Panel({ title, subtitle, right, children }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      <div className="p-5 border-b border-gray-800 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-semibold">{title}</div>
-          {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
-        </div>
-        {right}
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
-  );
-}
-
+import { InsightsPanel, Panel } from "../components/ui";
 function Badge({ text }) {
   return (
     <span className="text-xs px-2 py-1 rounded-lg border bg-indigo-500/10 border-indigo-500/30 text-indigo-200">
@@ -125,7 +110,7 @@ const histogramData = useMemo(() => {
                 <Panel
                   title="Department Share"
                   subtitle="Headcount distribution by department"
-                  right={<Badge text={`Total: ${data.total_employees}`} />}
+                  action={<Badge text={`Total: ${data.total_employees}`} />}
                 >
                   <PieChart
                     data={pieData}
@@ -182,7 +167,7 @@ const histogramData = useMemo(() => {
                 <Panel
                   title="Salary Distribution (Histogram)"
                   subtitle="Employee salary spread"
-                  right={
+                  action={
                     <div className="flex items-center gap-3 text-xs text-gray-400">
                       <span>
                         Min:{" "}

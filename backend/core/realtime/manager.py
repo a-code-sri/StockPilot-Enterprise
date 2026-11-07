@@ -56,9 +56,5 @@ class ConnectionManager:
 
         logger.debug("Broadcast realtime event to %s client(s)", len(targets) - len(dead))
 
-    @property
-    def connection_count(self) -> int:
-        return len(self._connections)
-
 
 manager = ConnectionManager()

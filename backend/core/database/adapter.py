@@ -8,8 +8,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-class DatabaseAdapter:
-    # Kept so existing `Depends(DatabaseAdapter.get_db)` call sites keep working.
-    get_db = staticmethod(get_db)

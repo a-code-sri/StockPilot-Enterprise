@@ -1,6 +1,6 @@
 # StockPilot web app
 
-React 18 + Vite + Tailwind. See the [root README](../README.md) for the full stack.
+React 18 + Vite + Tailwind. The full guide is [docs/FRONTEND.md](../docs/FRONTEND.md).
 
 ```bash
 npm install
