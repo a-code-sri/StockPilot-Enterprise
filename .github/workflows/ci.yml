@@ -59,16 +59,26 @@ jobs:
       - name: Build images
         run: |
           cp .env.example .env
-          docker compose build
+          docker compose --profile shop build
       - name: Smoke test the stack
         run: |
-          docker compose up -d
+          docker compose --profile shop up -d
           for i in $(seq 1 60); do
             curl -fsS http://localhost:8080/api/health && break
             sleep 2
           done
           curl -fsS http://localhost:8080/api/health | grep '"database":true'
           curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
-          docker compose logs --tail=50 api worker
+      - name: Smoke test the FreshBasket shop
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8501/healthz | grep -q '"stockpilot_live":true' && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8501/healthz | grep '"stockpilot_live":true'
+          curl -fsS http://localhost:8501/api/catalogue
+          curl -fsS http://localhost:8501/ | grep -q 'FreshBasket'
       - if: always()
-        run: docker compose down -v
+        run: docker compose --profile shop logs --tail=50 api worker shop
+      - if: always()
+        run: docker compose --profile shop down -v

@@ -10,7 +10,7 @@ checked offline.
       ▲                               │  business rows + outbox events (same transaction)
       │ WebSocket                     ▼
       └──── realtime listener ◀── pg_notify ◀── analytics worker ──▶ projection tables
- FastAPI ──▶ Ollama (local LLM, optional) · FreshBasket shop app ──REST──▶ FastAPI
+ FastAPI ──▶ Ollama (local LLM, optional) · FreshBasket shop ──REST + WebSocket──▶ FastAPI
 ```
 
 ## Team
@@ -37,7 +37,7 @@ checked offline.
 | Users and roles | role-based access (`module.read` / `module.write`), user activation, admin bootstrap |
 | Passwords | change password, one-time admin reset links, optional "forgot password" emails |
 | Backups | daily automatic database dumps with retention and one-command restore |
-| FreshBasket Fruits | a demo fruit-shop app that runs entirely on the StockPilot API and drives realistic traffic |
+| FreshBasket Online | a demo customer web shop on the StockPilot API: shoppers order and track deliveries live while staff fulfil them in StockPilot |
 
 ## Quick start (Docker)
 
@@ -61,10 +61,10 @@ computer only.
 | Add-on | Command | Details |
 |---|---|---|
 | AI assistant | `docker compose --profile ai up -d` (first run downloads ~2 GB) | [docs/AI_SETUP.md](docs/AI_SETUP.md) |
-| FreshBasket shop | `docker compose --profile simulator up -d --build` → http://localhost:8501 | [docs/CLIENT_APP.md](docs/CLIENT_APP.md) |
+| FreshBasket shop | `docker compose --profile shop up -d --build` → http://localhost:8501 | [docs/CLIENT_APP.md](docs/CLIENT_APP.md) |
 | Public HTTPS | `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile ai up -d --build` | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 
-To enable several profiles at once, list them in `.env`, for example `COMPOSE_PROFILES=ai,simulator`.
+To enable several profiles at once, list them in `.env`, for example `COMPOSE_PROFILES=ai,shop`.
 Stop with `docker compose down`. Adding `-v` also **deletes the database**.
 
 ## Documentation
@@ -76,7 +76,7 @@ Stop with `docker compose down`. Adding `-v` also **deletes the database**.
 | [Database](docs/DATABASE.md) | schema and ER diagram, constraints, migrations, notifications, backups and restore |
 | [Backend](docs/BACKEND.md) | code layout, business rules and maths, permissions, full API reference, tests |
 | [Frontend](docs/FRONTEND.md) | pages and permissions, sessions, live refresh, charts, build |
-| [Client app](docs/CLIENT_APP.md) | FreshBasket Fruits and how to test with it |
+| [Client app](docs/CLIENT_APP.md) | FreshBasket Online, with a step-by-step demo script |
 | [AI setup](docs/AI_SETUP.md) | Ollama in Docker or on the host, troubleshooting |
 | [Deployment](docs/DEPLOYMENT.md) | a cloud server with a domain and HTTPS |
 
@@ -109,7 +109,7 @@ python -m backend.workers.analytics_worker          # second terminal
 cd frontend && npm install && npm run dev           # http://localhost:5173
 
 # Client app
-cd client_app && pip install -r requirements.txt && streamlit run app.py
+cd client_app && pip install -r requirements.txt && uvicorn server:app --port 8501   # set SHOP_USERNAME / SHOP_PASSWORD
 ```
 
 For a local run, set `DATABASE_URL` and `APP_ENV=development` in `.env`.
@@ -155,7 +155,7 @@ backend/
   scripts/       create_admin
   alembic/       migrations
 frontend/        React app (pages/, components/, context/, realtime/, lib/)
-client_app/      FreshBasket Fruits: Streamlit shop app on the REST API
+client_app/      FreshBasket Online: customer web shop (FastAPI + plain JS) on the REST API and WebSocket
 website/         project website (index.html, screenshots, streamlit_app.py)
 docs/            documentation (see above)
 ops/             backup.sh, Caddyfile

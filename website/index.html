@@ -290,7 +290,7 @@ PUT  /delivery/FB-261107-CYK8/status   {"status": "out_for_delivery"}
   <div class="cols">
     <div class="point"><h3>Nothing is counted twice</h3><p>Failed events retry with backoff and then park as <code>dead</code> for inspection. A bad event can't block the queue or skew a chart.</p></div>
     <div class="point"><h3>Rebuild from scratch</h3><p>Every figure can be recalculated from the source rows with one command. That's useful after a fix or a data import.</p></div>
-    <div class="point"><h3>Clients only need the API</h3><p>Anything that can make an HTTP request can join in. The demo fruit shop below is a separate app that uses nothing else.</p></div>
+    <div class="point"><h3>Clients only need the API</h3><p>Anything that can make an HTTP request can join in. The demo fruit shop below is a separate app that uses nothing else, plus the WebSocket for live updates.</p></div>
   </div>
 </section>
 
@@ -317,37 +317,37 @@ PUT  /delivery/FB-261107-CYK8/status   {"status": "out_for_delivery"}
 
 <section class="section shop" id="shop" aria-labelledby="shop-title">
   <div class="head">
-    <span class="eyebrow">Demo client · FreshBasket Fruits</span>
+    <span class="eyebrow">Demo client · FreshBasket Online</span>
     <h2 id="shop-title">A fruit shop that runs on StockPilot</h2>
-    <p class="lede">FreshBasket is a separate point-of-sale app for an imagined fruit shop. It shows how a real business would use StockPilot. It also works as the test client: everything it does goes through the public REST API and appears live on the StockPilot dashboards.</p>
+    <p class="lede">FreshBasket is the online store of an imagined fruit seller, seen from the shopper's side. Customers browse live stock, check out and track their delivery. The shop's staff fulfil the order in StockPilot, and both sides update each other live over WebSockets.</p>
   </div>
   <div class="shop-grid">
     <figure>
-      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Counter</span></div>
-        <img src="screenshots/shop-counter.webp" width="1440" height="900" alt="FreshBasket counter screen with fruit cards, quantities and a bill totalling 1,480 rupees." loading="lazy"></div>
-      <figcaption>Counter: pick fruit from the shelf, take payment by cash, UPI or card.</figcaption>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Shop</span></div>
+        <img src="screenshots/shop-home.webp" width="1440" height="900" alt="FreshBasket shop page with fruit cards showing price, live stock and freshness, and a basket holding five items." loading="lazy"></div>
+      <figcaption>Shop: stock and freshness come straight from StockPilot inventory and update live.</figcaption>
     </figure>
     <figure>
-      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Orders</span></div>
-        <img src="screenshots/shop-orders.webp" width="1440" height="900" alt="FreshBasket open orders with buttons to pack, send out or cancel each home delivery." loading="lazy"></div>
-      <figcaption>Orders: home deliveries move from packed to out for delivery to delivered and paid.</figcaption>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Checkout</span></div>
+        <img src="screenshots/shop-checkout.webp" width="1440" height="900" alt="FreshBasket checkout with delivery details, a delivery slot, pay-on-delivery options and the order summary." loading="lazy"></div>
+      <figcaption>Checkout: placing the order creates a stock-linked delivery in StockPilot.</figcaption>
     </figure>
     <figure>
-      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Stock</span></div>
-        <img src="screenshots/shop-stock.webp" width="1440" height="900" alt="FreshBasket stock table with days left before expiry, plus forms to receive stock and write off spoilage." loading="lazy"></div>
-      <figcaption>Stock: receive from suppliers, write off spoiled fruit, add new products.</figcaption>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8080 · Delivery</span></div>
+        <img src="screenshots/shop-stockpilot-delivery.webp" width="1440" height="900" alt="StockPilot Delivery page showing the shop's order with stock-linked items and buttons to mark it delivered or failed." loading="lazy"></div>
+      <figcaption>StockPilot: the order appears by itself. Staff pack and dispatch it, which deducts the stock.</figcaption>
     </figure>
     <figure>
-      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Busy day</span></div>
-        <img src="screenshots/shop-busy-day.webp" width="1440" height="900" alt="FreshBasket busy day simulation log listing completed sales and a summary of the day." loading="lazy"></div>
-      <figcaption>Busy day: simulates customers, riders, restocks and spoilage to load-test the whole system.</figcaption>
+      <div class="frame"><div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>localhost:8501 · Order tracking</span></div>
+        <img src="screenshots/shop-tracking.webp" width="1440" height="900" alt="FreshBasket order tracking page showing the order on the way, with a progress bar and a status timeline." loading="lazy"></div>
+      <figcaption>Tracking: the shopper's page follows each status change within a second.</figcaption>
     </figure>
   </div>
   <ul class="ticks">
-    <li><b>Counter sale</b> creates a delivery linked to inventory, completes it at once (stock deducted) and records the payment as income.</li>
-    <li><b>Home delivery</b> stays open until the rider delivers it. Payment is recorded then. A failed delivery returns the stock automatically.</li>
-    <li><b>Receiving stock</b> adds to inventory and records the supplier payment as an expense. <b>Spoilage</b> is written off with a reason.</li>
-    <li><b>API log</b> lists every request the shop made, which is handy while testing.</li>
+    <li><b>Inventory:</b> the shop sells only what StockPilot has. It holds back stock for orders not yet dispatched, and hides fruit past its expiry date. Restocking in StockPilot shows up on the shop at once.</li>
+    <li><b>Delivery:</b> checkout creates a delivery whose items are linked to inventory. Dispatch deducts the stock; a failed delivery puts it back.</li>
+    <li><b>Accounts:</b> when staff mark the order delivered, the shop records the payment as income, once per order.</li>
+    <li><b>Live updates:</b> the shop server follows StockPilot's WebSocket and pushes changes to shoppers. StockPilot's own Delivery, Inventory and Accounts pages and dashboards refresh by themselves too.</li>
   </ul>
 </section>
 
@@ -402,8 +402,8 @@ docker compose logs -f ollama-pull     <span class="c"># wait for "success", the
     </div></li>
     <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
       <h3>Open the FreshBasket shop <span class="opt">Optional</span></h3>
-      <p>Start the demo shop, open <a href="http://localhost:8501">http://localhost:8501</a> and sign in with the same StockPilot account. Click <b>Load starter catalogue</b>, make a sale, and watch the StockPilot dashboard change.</p>
-      <div class="code"><pre><code>docker compose --profile simulator up -d --build</code></pre></div>
+      <p>Start the demo shop and open <a href="http://localhost:8501">http://localhost:8501</a>. It signs in to StockPilot with the admin account from <code>.env</code>. Click <b>How the demo works → Stock the shop</b>, place an order, then pack and dispatch it on StockPilot's Delivery page and watch both apps update.</p>
+      <div class="code"><pre><code>docker compose --profile shop up -d --build</code></pre></div>
     </div></li>
     <li class="step"><div class="step-num" aria-hidden="true"></div><div class="step-body">
       <h3>Put it online with HTTPS <span class="opt">Optional</span></h3>

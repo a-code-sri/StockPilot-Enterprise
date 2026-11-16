@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api, { errorMessage } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
 import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
 import { money } from "../lib/format";
 
@@ -86,6 +87,8 @@ export default function Inventory() {
     const t = setTimeout(fetchInventory, 250); // debounce search typing
     return () => clearTimeout(t);
   }, [fetchInventory]);
+  // Stock changes made elsewhere (deliveries, the FreshBasket shop) show up without a reload.
+  useAnalyticsRefresh("inventory", fetchInventory);
 
   const fetchLogs = useCallback(async (item) => {
     try {

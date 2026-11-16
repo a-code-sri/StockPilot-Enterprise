@@ -24,7 +24,9 @@ A summary of the whole business:
 - income against expenses for the last 30 days,
 - headcount by department and the top executive.
 
-It refreshes by itself whenever something changes, so you don't need to reload it.
+It refreshes by itself whenever something changes, so you don't need to reload it. The
+**Inventory**, **Delivery** and **Accounts** pages do the same: changes made by a colleague or
+by a connected app, such as the FreshBasket shop, appear within a second.
 
 ## Inventory
 

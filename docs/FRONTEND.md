@@ -109,7 +109,11 @@ that names the missing permission. Buttons that change data are hidden unless th
    ```
 
    `load` runs about 400 ms after a matching `analytics.updated` event. Bursts of events are
-   merged into one refresh.
+   merged into one refresh. Events for other modules don't delay or cancel it.
+
+   The pages that subscribe are the Dashboard, every analytics page, and the **Delivery**,
+   **Inventory** and **Accounts** pages. Changes made by someone else (another user, the
+   FreshBasket shop) appear without a reload.
 4. The sidebar shows the connection status (Live / Connecting / Offline).
 
 ## AI in the UI

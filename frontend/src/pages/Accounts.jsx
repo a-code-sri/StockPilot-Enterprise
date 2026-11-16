@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api, { errorMessage } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
 import Pager from "../components/Pager";
 import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
 import { dateTime, money } from "../lib/format";
@@ -56,6 +57,12 @@ export default function Accounts() {
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
+
+  // Entries recorded elsewhere (e.g. FreshBasket booking a payment) appear without a reload.
+  useAnalyticsRefresh("accounts", () => {
+    fetchTransactions();
+    fetchSummary();
+  });
 
   const refresh = () => {
     fetchTransactions();

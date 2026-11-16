@@ -67,13 +67,37 @@ class InventoryLogModel(Base):
     )
 
 
-# action -> analytics event type
+# action -> analytics event type. stock_received and item_changed update no projection;
+# they exist so dashboards and connected clients refresh when stock levels change.
 _EVENTS = {
+    InventoryAction.add.value: "stock_received",
     InventoryAction.consume.value: "stock_consumed",
     InventoryAction.deliver.value: "stock_consumed",
     InventoryAction.return_.value: "stock_returned",
     InventoryAction.order.value: "purchase_order_created",
+    InventoryAction.status_change.value: "item_changed",
 }
+
+
+def _emit_item_changed(connection, target: "InventoryItemModel", change: str) -> None:
+    emit_event(
+        connection,
+        module="inventory",
+        event_type="item_changed",
+        aggregate_type="inventory_item",
+        aggregate_id=str(target.id),
+        payload={"item_id": target.id, "change": change, "date": utcnow().isoformat()},
+    )
+
+
+@event.listens_for(InventoryItemModel, "after_insert")
+def outbox_after_item_insert(mapper, connection, target):
+    _emit_item_changed(connection, target, "created")
+
+
+@event.listens_for(InventoryItemModel, "after_delete")
+def outbox_after_item_delete(mapper, connection, target):
+    _emit_item_changed(connection, target, "deleted")
 
 
 @event.listens_for(InventoryLogModel, "after_insert")

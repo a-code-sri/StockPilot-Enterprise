@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api, { errorMessage } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAnalyticsRefresh } from "../realtime/RealtimeProvider";
 import Pager from "../components/Pager";
 import { ErrorBanner, Page, Panel, buttonClass, inputClass } from "../components/ui";
 import { dateTime, money } from "../lib/format";
@@ -138,6 +139,7 @@ function DeliveryDetail({ orderId, canWrite, onChanged, onError }) {
   useEffect(() => {
     load();
   }, [load]);
+  useAnalyticsRefresh("delivery", load);
 
   const changeStatus = async (status) => {
     setBusy(true);
@@ -245,6 +247,8 @@ export default function Delivery() {
   useEffect(() => {
     fetchRows();
   }, [fetchRows]);
+  // Orders placed or moved elsewhere (e.g. by the FreshBasket shop) appear without a reload.
+  useAnalyticsRefresh("delivery", fetchRows);
 
   useEffect(() => {
     if (!canWrite || !can("inventory.read")) return;

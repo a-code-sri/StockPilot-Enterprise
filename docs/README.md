@@ -15,7 +15,7 @@ Start with the [root README](../README.md) for a quick start. The guides below g
 | [Database](DATABASE.md) | every table, how the modules' data relates, migrations, the event outbox and backups |
 | [Backend](BACKEND.md) | the FastAPI code layout, business rules, the analytics maths, the API reference and the tests |
 | [Frontend](FRONTEND.md) | the React app: pages, permissions, sessions, live refresh, charts and the build |
-| [Client app](CLIENT_APP.md) | FreshBasket Fruits, the demo shop that uses StockPilot only through its REST API |
+| [Client app](CLIENT_APP.md) | FreshBasket Online, the demo customer shop that runs on StockPilot's API and WebSocket |
 | [AI setup](AI_SETUP.md) | installing Ollama and the model, and fixing common problems |
 | [Deployment](DEPLOYMENT.md) | putting StockPilot on a server with HTTPS |
 
@@ -37,6 +37,6 @@ Start with the [root README](../README.md) for a quick start. The guides below g
 | Background work | analytics worker process (transactional outbox → projection tables) |
 | Live updates | PostgreSQL NOTIFY → API WebSocket `/ws/realtime` → browser |
 | AI | Ollama running a local model (default `qwen2.5:3b`) with tool calling |
-| Client app | Streamlit + `requests` |
+| Client app | FastAPI + httpx + websockets, storefront in plain HTML/CSS/JS |
 | Packaging | Docker Compose; nginx for the web app; Caddy for HTTPS in production |
 | Quality | pytest (unit and integration), oxlint, GitHub Actions CI |

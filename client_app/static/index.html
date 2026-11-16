@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreshBasket · Fresh fruit, delivered</title>
+<meta name="description" content="Order fresh fruit online and track your delivery live.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧺</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#/" aria-label="FreshBasket home">
+      <span class="brand-mark" aria-hidden="true">🧺</span>
+      <span class="brand-text"><b id="shop-name">FreshBasket</b><small>Fresh fruit, delivered</small></span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="#/" data-nav="shop">Shop</a>
+      <a href="#/orders" data-nav="orders">My orders <span class="pill-count" id="orders-count" hidden></span></a>
+    </nav>
+    <span class="live" id="live" title="Stock and order updates arrive live from the shop">
+      <i aria-hidden="true"></i><span>Connecting…</span>
+    </span>
+    <button class="cart-btn" id="cart-btn" type="button" aria-controls="cart" aria-expanded="false">
+      <span aria-hidden="true">🛒</span>
+      <span class="cart-btn-label">Basket</span>
+      <span class="cart-badge" id="cart-count">0</span>
+    </button>
+  </div>
+</header>
+
+<div class="demo-bar" id="demo-bar" hidden>
+  <div class="demo-bar-inner">
+    <span class="demo-tag">Demo</span>
+    <p>This shop runs on <b>StockPilot</b>. Place an order here, then pack and dispatch it in StockPilot and watch this page update live.</p>
+    <div class="demo-actions">
+      <button type="button" class="link-btn" data-open-guide>How the demo works</button>
+      <a class="link-btn" id="stockpilot-link" href="http://localhost:8080" target="_blank" rel="noopener">Open StockPilot ↗</a>
+      <button type="button" class="icon-btn" id="demo-close" aria-label="Hide demo bar">×</button>
+    </div>
+  </div>
+</div>
+
+<main id="view" tabindex="-1"></main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="cart" aria-label="Your basket" aria-hidden="true">
+  <div class="drawer-head">
+    <h2>Your basket</h2>
+    <button type="button" class="icon-btn" id="cart-close" aria-label="Close basket">×</button>
+  </div>
+  <div class="drawer-body" id="cart-body"></div>
+  <div class="drawer-foot" id="cart-foot"></div>
+</aside>
+
+<dialog class="guide" id="guide" aria-labelledby="guide-title">
+  <div class="guide-head">
+    <h2 id="guide-title">How the demo works</h2>
+    <button type="button" class="icon-btn" data-close-guide aria-label="Close">×</button>
+  </div>
+  <p class="guide-lead">FreshBasket is a pretend fruit shop. Its online store (this page) is a client of
+    <b>StockPilot</b>, which the shop's staff use to run the business. Everything you do here goes through StockPilot's API.</p>
+  <ol class="guide-steps">
+    <li><b>Shop as a customer.</b> Add fruit to your basket and check out. Stock shown here is live StockPilot inventory.</li>
+    <li><b>Be the shop staff.</b> Open <a data-sp="/delivery" target="_blank" rel="noopener">StockPilot → Delivery</a>.
+      Your order is there. Move it to <i>Packed</i>, then <i>Out for delivery</i> (this takes the fruit off the shelf).</li>
+    <li><b>Watch it live.</b> Your order page here updates by itself, and the stock on the shop page drops.
+      StockPilot's <a data-sp="/dashboard" target="_blank" rel="noopener">Dashboard</a> and
+      <a data-sp="/analytics/inventory" target="_blank" rel="noopener">Inventory analytics</a> update too.</li>
+    <li><b>Deliver it.</b> Mark it <i>Delivered</i> in StockPilot. The shop records the payment, so it appears in
+      <a data-sp="/accounts" target="_blank" rel="noopener">StockPilot → Accounts</a>. Mark it <i>Failed</i> instead and the stock goes back.</li>
+    <li><b>Restock.</b> Receive stock on <a data-sp="/inventory" target="_blank" rel="noopener">StockPilot → Inventory</a> and it shows up here instantly.</li>
+  </ol>
+  <div class="guide-tools" id="guide-tools" hidden>
+    <h3>Demo tools</h3>
+    <p>Shortcuts for a demo. A real shopper never sees these.</p>
+    <div class="tool-row">
+      <button type="button" class="btn btn-ghost" id="tool-stock">🧺 Stock the shop</button>
+      <span>Adds the 12 starter fruits to StockPilot inventory (and books the purchase in Accounts).</span>
+    </div>
+    <div class="tool-row">
+      <button type="button" class="btn btn-ghost" id="tool-shoppers">👥 Send 5 shoppers</button>
+      <span>Places 5 orders from other customers, so StockPilot's Delivery page has work to do.</span>
+    </div>
+  </div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

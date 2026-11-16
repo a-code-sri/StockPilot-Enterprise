@@ -3,10 +3,10 @@
 #   cp .env.example .env        # then edit secrets
 #   docker compose up -d --build                     # app at http://localhost:8080
 #   docker compose --profile ai up -d --build        # + local AI (Ollama)
-#   docker compose --profile simulator up -d         # + FreshBasket fruit shop app on :8501
+#   docker compose --profile shop up -d --build      # + FreshBasket Online customer shop on :8501
 #
 # Services: db (PostgreSQL) -> api (FastAPI, runs migrations) -> worker (analytics
-# outbox) ; web (nginx: React app + /api proxy) ; optional ollama / fruit shop client.
+# outbox) ; web (nginx: React app + /api proxy) ; optional ollama / FreshBasket shop.
 
 name: stockpilot
 
@@ -131,20 +131,29 @@ services:
     entrypoint: ["sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}"]
     restart: on-failure
 
-  # ---------------- optional: FreshBasket fruit shop (client app / traffic simulator) ----------------
-  simulator:
+  # ---------------- optional: FreshBasket Online (customer web shop on the StockPilot API) ----------------
+  shop:
     build: ./client_app
-    profiles: ["simulator"]
+    profiles: ["shop", "simulator"]   # "simulator" kept for older instructions
+    restart: unless-stopped
     environment:
       STOCKPILOT_API_URL: http://api:8000
-      STOCKPILOT_WEB_URL: http://localhost:${WEB_PORT:-8080}
-      SHOP_NAME: ${SHOP_NAME:-FreshBasket Fruits}
+      STOCKPILOT_WEB_URL: ${STOCKPILOT_WEB_URL:-http://localhost:${WEB_PORT:-8080}}
+      SHOP_NAME: ${SHOP_NAME:-FreshBasket}
+      # StockPilot account the shop signs in with (needs inventory.read/write, delivery.read/write,
+      # accounts.write). Defaults to the bootstrap admin.
+      SHOP_USERNAME: ${SHOP_USERNAME:-${ADMIN_USERNAME:-}}
+      SHOP_PASSWORD: ${SHOP_PASSWORD:-${ADMIN_PASSWORD:-}}
+      SHOP_DEMO_TOOLS: ${SHOP_DEMO_TOOLS:-true}
+    volumes:
+      - shop_data:/data
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "${SIMULATOR_PORT:-8501}:8501"
+      - "${SHOP_PORT:-8501}:8501"
 
 volumes:
   pgdata:
   ollama:
+  shop_data:

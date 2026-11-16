@@ -7,7 +7,7 @@ flowchart LR
     B["Browser<br/>React app"] -- "HTTPS /api/*" --> N["web<br/>nginx"]
     B <-. "WebSocket /api/ws/realtime" .-> N
     N -- "/api/ → :8000" --> A["api<br/>FastAPI"]
-    S["FreshBasket shop<br/>Streamlit"] -- "REST" --> A
+    S["FreshBasket shop<br/>customer web shop"] -- "REST + WebSocket" --> A
     A -- "SQL" --> D[("db<br/>PostgreSQL 16")]
     W["worker<br/>analytics"] -- "SQL" --> D
     D -. "NOTIFY analytics_outbox" .-> W
@@ -25,11 +25,11 @@ flowchart LR
 | `web` | `frontend/Dockerfile` | nginx serving the built React app. Proxies `/api/` (including the WebSocket) to `api` |
 | `backup` | `postgres:16-alpine` + `ops/backup.sh` | `pg_dump` every 24 h into `./backups`, with retention and a free-space check |
 | `ollama`, `ollama-pull` | `ollama/ollama` (profile `ai`) | local model server and a one-off model download |
-| `simulator` | `client_app/Dockerfile` (profile `simulator`) | FreshBasket Fruits, the demo client on port 8501 |
+| `shop` | `client_app/Dockerfile` (profile `shop`) | FreshBasket Online, the demo customer shop on port 8501 |
 | `caddy` | `caddy:2-alpine` (`docker-compose.prod.yml`) | public HTTPS with an automatic Let's Encrypt certificate |
 
 Start-up order follows health checks: `db` becomes healthy, then `api` migrates and becomes
-healthy, then `worker`, `web` and `simulator` start.
+healthy, then `worker`, `web` and `shop` start.
 
 The browser talks only to nginx. It reaches the API at the same origin (`/api`), so the browser
 needs no CORS rules and the cookie-free bearer tokens never cross origins. In production only
@@ -114,7 +114,7 @@ Failures are contained:
 
 | Module | Events | Projection tables |
 |---|---|---|
-| inventory | `stock_consumed`, `stock_returned`, `purchase_order_created` | `inventory_daily_consumption`, `inventory_monthly_orders` |
+| inventory | `stock_consumed`, `stock_returned`, `purchase_order_created`; `stock_received` and `item_changed` (no projection, they only trigger a live refresh) | `inventory_daily_consumption`, `inventory_monthly_orders` |
 | accounts | `transaction_created`, `transaction_deleted` | `accounts_daily_totals`, `accounts_daily_category_totals` |
 | delivery | `delivery_changed` | `delivery_daily_counts`, `delivery_daily_hour_counts`, `delivery_daily_item_counts`, `delivery_daily_status_counts` |
 | organization | `org_changed` | `org_overview_snapshot` |

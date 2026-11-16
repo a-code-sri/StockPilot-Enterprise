@@ -68,5 +68,13 @@ def handle_purchase_order_created(db: Session, payload: dict[str, Any], outbox_i
     add_order(db, month)
 
 
+def handle_stock_received(db: Session, payload: dict[str, Any], outbox_id: int) -> None:
+    """No projection tracks receipts; processing the event announces the change to live clients."""
+
+
+def handle_item_changed(db: Session, payload: dict[str, Any], outbox_id: int) -> None:
+    """Item created, deleted or its status changed: nothing to aggregate, only a live refresh."""
+
+
 def handle_event(db: Session, event_type: str, payload: dict[str, Any], outbox_id: int) -> None:
     logger.warning("inventory analytics: unhandled event '%s' (outbox_id=%s)", event_type, outbox_id)

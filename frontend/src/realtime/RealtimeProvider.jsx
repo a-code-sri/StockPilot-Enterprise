@@ -33,10 +33,15 @@ export function useAnalyticsRefresh(modules, onUpdate, delayMs = 400) {
   const callback = useRef(onUpdate);
   callback.current = onUpdate;
   const key = [].concat(modules).join(",");
+  const timer = useRef(null);
 
   useEffect(() => {
     if (lastEvent?.type !== "analytics.updated" || !key.split(",").includes(lastEvent?.module)) return;
-    const t = setTimeout(() => callback.current(), delayMs);
-    return () => clearTimeout(t);
+    // Only matching events restart the debounce. Events for other modules (a dispatch sends
+    // inventory and delivery events together) must not cancel a pending refresh.
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => callback.current(), delayMs);
   }, [lastEvent, key, delayMs]);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
 }
